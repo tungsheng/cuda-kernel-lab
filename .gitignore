@@ -1,0 +1,18 @@
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.egg-info/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+htmlcov/
+.coverage
+
+# GPU/profiler outputs can be large; keep intentional reports checked in.
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.sqlite
+
