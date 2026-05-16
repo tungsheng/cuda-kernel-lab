@@ -1,4 +1,4 @@
-"""Benchmark PyTorch baselines for memory-bandwidth primitives."""
+"""Benchmark memory-bandwidth primitives across available backends."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from inference_kernel_lab.metrics import dtype_size_bytes
 from kernels.torch_baselines.memory import flop_count, memory_traffic_bytes
 
 OPS = ("copy", "scale", "vector_add", "reduction_sum")
+BACKENDS = ("torch", "triton")
 
 
 def main() -> None:
@@ -20,18 +21,23 @@ def main() -> None:
     device = resolve_device(torch, args.device)
     dtype = resolve_dtype(torch, args.dtype)
 
-    results = [
-        run_one(
-            torch=torch,
-            op_name=op_name,
-            numel=args.numel,
-            dtype=dtype,
-            device=device,
-            warmup=args.warmup,
-            iterations=args.iterations,
-        )
-        for op_name in selected_ops(args.op)
-    ]
+    backends = selected_backends(args.backend, device)
+    results = []
+    for backend in backends:
+        ensure_backend_available(backend, device)
+        for op_name in selected_ops(args.op):
+            results.append(
+                run_one(
+                    torch=torch,
+                    backend=backend,
+                    op_name=op_name,
+                    numel=args.numel,
+                    dtype=dtype,
+                    device=device,
+                    warmup=args.warmup,
+                    iterations=args.iterations,
+                )
+            )
 
     if args.json:
         print(json.dumps([result.as_dict() for result in results], indent=2))
@@ -42,6 +48,7 @@ def main() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--op", choices=("all", *OPS), default="all")
+    parser.add_argument("--backend", choices=("all", *BACKENDS), default="torch")
     parser.add_argument("--numel", type=int, default=16_777_216)
     parser.add_argument("--dtype", choices=("float32", "float16", "bfloat16"), default="float32")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -53,6 +60,39 @@ def parse_args() -> argparse.Namespace:
 
 def selected_ops(op_name: str) -> tuple[str, ...]:
     return OPS if op_name == "all" else (op_name,)
+
+
+def selected_backends(backend: str, device: str) -> tuple[str, ...]:
+    if backend != "all":
+        return (backend,)
+
+    if device == "cuda" and triton_is_available():
+        return BACKENDS
+    return ("torch",)
+
+
+def ensure_backend_available(backend: str, device: str) -> None:
+    if backend == "torch":
+        return
+    if backend == "triton" and device != "cuda":
+        raise SystemExit(
+            "The Triton backend requires CUDA tensors. Use --device cuda on a CUDA host."
+        )
+    if backend == "triton" and not triton_is_available():
+        raise SystemExit(
+            "The Triton backend requires torch, triton, and CUDA. "
+            "Install GPU extras with: uv sync --group dev --extra gpu"
+        )
+    if backend not in BACKENDS:
+        raise ValueError(f"unknown backend: {backend}")
+
+
+def triton_is_available() -> bool:
+    try:
+        from kernels.triton import memory
+    except ImportError:
+        return False
+    return memory.is_available()
 
 
 def require_torch() -> Any:
@@ -85,6 +125,7 @@ def resolve_dtype(torch: Any, dtype_name: str) -> Any:
 def run_one(
     *,
     torch: Any,
+    backend: str,
     op_name: str,
     numel: int,
     dtype: Any,
@@ -97,11 +138,11 @@ def run_one(
 
     x = torch.randn(numel, device=device, dtype=dtype)
     y = torch.randn(numel, device=device, dtype=dtype)
-    fn = build_op(op_name, x, y)
+    fn = build_op(backend, op_name, x, y)
     dtype_size = dtype_size_bytes(dtype)
 
     return benchmark_callable(
-        op_name,
+        f"{backend}:{op_name}",
         fn,
         device=device,
         dtype=str(dtype).replace("torch.", ""),
@@ -113,28 +154,42 @@ def run_one(
     )
 
 
-def build_op(op_name: str, x: Any, y: Any) -> Callable[[], Any]:
-    from kernels.torch_baselines import memory
+def build_op(backend: str, op_name: str, x: Any, y: Any) -> Callable[[], Any]:
+    if backend == "torch":
+        from kernels.torch_baselines import memory
 
-    if op_name == "copy":
-        return lambda: memory.copy(x)
-    if op_name == "scale":
-        return lambda: memory.scale(x, 0.5)
-    if op_name == "vector_add":
-        return lambda: memory.vector_add(x, y)
-    if op_name == "reduction_sum":
-        return lambda: memory.reduction_sum(x)
-    raise ValueError(f"unknown op: {op_name}")
+        if op_name == "copy":
+            return lambda: memory.copy(x)
+        if op_name == "scale":
+            return lambda: memory.scale(x, 0.5)
+        if op_name == "vector_add":
+            return lambda: memory.vector_add(x, y)
+        if op_name == "reduction_sum":
+            return lambda: memory.reduction_sum(x)
+
+    if backend == "triton":
+        from kernels.triton import memory
+
+        if op_name == "copy":
+            return lambda: memory.copy(x)
+        if op_name == "scale":
+            return lambda: memory.scale(x, 0.5)
+        if op_name == "vector_add":
+            return lambda: memory.vector_add(x, y)
+        if op_name == "reduction_sum":
+            return lambda: memory.reduction_sum(x)
+
+    raise ValueError(f"unknown backend/op combination: {backend}:{op_name}")
 
 
 def print_table(results: list[BenchmarkResult]) -> None:
     print(
-        f"{'name':<15} {'device':<8} {'dtype':<9} "
+        f"{'name':<22} {'device':<8} {'dtype':<9} "
         f"{'p50_ms':>10} {'p95_ms':>10} {'p99_ms':>10} {'GB/s':>10} {'TFLOP/s':>10}"
     )
     for result in results:
         print(
-            f"{result.name:<15} {result.device:<8} {result.dtype:<9} "
+            f"{result.name:<22} {result.device:<8} {result.dtype:<9} "
             f"{result.p50_ms:10.4f} {result.p95_ms:10.4f} {result.p99_ms:10.4f} "
             f"{result.bandwidth_gbps:10.2f} {result.tflops:10.4f}"
         )

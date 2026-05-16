@@ -31,6 +31,7 @@ inference-kernel-lab/
 ├── inference_kernel_lab/
 │   ├── benchmark.py
 │   ├── device.py
+│   ├── gpu_info.py
 │   └── metrics.py
 ├── kernels/
 │   ├── torch_baselines/
@@ -53,11 +54,15 @@ Create the local environment and install development tools:
 uv sync --group dev
 ```
 
-Install GPU extras when working on a CUDA host:
+Install the PyTorch/Triton extra before running kernel tests or benchmarks:
 
 ```bash
 uv sync --group dev --extra gpu
+uv run gpu-info
 ```
+
+Triton is installed only on Linux CUDA hosts. On other platforms the PyTorch
+baseline can still run once the `gpu` extra installs PyTorch.
 
 Run the correctness tests:
 
@@ -74,18 +79,33 @@ uv run gpu-info
 Run the Milestone 0/1 memory benchmark:
 
 ```bash
-uv run python -m benchmarks.memory_bandwidth --op all --numel 16777216 --dtype float32
+uv run python -m benchmarks.memory_bandwidth --backend all --op all --numel 16777216 --dtype float32
 ```
 
 Example output columns:
 
 ```text
-name             device    dtype      p50_ms   p95_ms   p99_ms   GB/s    TFLOP/s
-copy             cuda      float32    ...
-scale            cuda      float32    ...
-vector_add       cuda      float32    ...
-reduction_sum    cuda      float32    ...
+name                   device    dtype      p50_ms   p95_ms   p99_ms   GB/s    TFLOP/s
+torch:copy             cuda      float32    ...
+triton:copy            cuda      float32    ...
+torch:scale            cuda      float32    ...
+triton:scale           cuda      float32    ...
 ```
+
+## CUDA Host Workflow
+
+Use this checklist before collecting benchmark numbers:
+
+```bash
+uv sync --group dev --extra gpu
+uv run gpu-info
+uv run pytest
+uv run python -m benchmarks.memory_bandwidth --backend all --device cuda --op all
+```
+
+`--backend all` runs PyTorch and Triton when CUDA/Triton are available. On a
+CPU-only host it runs the PyTorch backend only, so local development still stays
+fast and boring in the best possible way.
 
 ## Milestones
 
@@ -108,6 +128,11 @@ Initial kernels:
 - `scale`
 - `vector_add`
 - `reduction_sum`
+
+Current backends:
+
+- PyTorch baseline
+- Triton CUDA kernels for the same primitive set
 
 Expected lesson: simple elementwise kernels are usually limited by high
 bandwidth memory traffic, not floating point throughput.
