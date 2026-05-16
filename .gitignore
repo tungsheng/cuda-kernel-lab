@@ -1,18 +1,76 @@
+# macOS / editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python caches and packaging
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
-__pycache__/
-*.egg-info/
-*.pyc
-.venv/
-venv/
+.mypy_cache/
+.pyre/
+.hypothesis/
 build/
 dist/
 htmlcov/
 .coverage
+coverage.xml
+
+# Local environments
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa*
+id_ed25519*
+*_token
+*_secret
+credentials.json
+secrets.json
+
+# Logs and temporary outputs
+*.log
+logs/
+tmp/
+temp/
+
+# Notebook and analysis scratch state
+.ipynb_checkpoints/
 
 # GPU/profiler outputs can be large; keep intentional reports checked in.
 *.ncu-rep
 *.nsys-rep
 *.qdrep
 *.sqlite
+*.sqlite3
+profiling/**/captures/
+profiling/**/raw/
+benchmarks/results/
 
+# Large model/data artifacts should be downloaded or generated locally.
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.npz
+*.npy
+data/
+datasets/
+artifacts/

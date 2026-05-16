@@ -68,7 +68,7 @@ uv run pytest
 Inspect the available device:
 
 ```bash
-uv run python scripts/gpu_info.py
+uv run gpu-info
 ```
 
 Run the Milestone 0/1 memory benchmark:
