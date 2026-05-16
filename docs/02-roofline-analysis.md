@@ -73,3 +73,32 @@ fraction of peak HBM bandwidth, the roofline model says additional scalar FLOP
 optimization is unlikely to move the result much. The next questions become
 coalescing, launch overhead, vectorization, occupancy, and whether fusion can
 remove reads or writes entirely.
+
+## Softmax Fusion
+
+Softmax adds reductions and transcendental math, but the first-order roofline
+lesson is still memory movement. A naive two-kernel implementation moves about
+four tensors through HBM:
+
+```text
+read input -> write intermediate -> read intermediate -> write output
+```
+
+The fused Triton kernel moves the idealized lower bound:
+
+```text
+read input -> store output
+```
+
+Run:
+
+```bash
+uv run python -m benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
+```
+
+Record:
+
+| Backend | Shape | dtype | Traffic Model | p50 ms | GB/s | Interpretation |
+| --- | ---: | --- | --- | ---: | ---: | --- |
+| torch | 4096x1024 | float32 | fused | TBD | TBD | library baseline |
+| triton | 4096x1024 | float32 | fused | TBD | TBD | fused custom kernel |

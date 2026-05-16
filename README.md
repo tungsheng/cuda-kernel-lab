@@ -82,6 +82,12 @@ Run the Milestone 0/1 memory benchmark:
 uv run python -m benchmarks.memory_bandwidth --backend all --op all --numel 16777216 --dtype float32
 ```
 
+Run the Milestone 2 softmax benchmark:
+
+```bash
+uv run python -m benchmarks.softmax --backend all --rows 4096 --cols 1024 --dtype float32
+```
+
 Example output columns:
 
 ```text
@@ -101,6 +107,7 @@ uv sync --group dev --extra gpu
 uv run gpu-info
 uv run pytest
 uv run python -m benchmarks.memory_bandwidth --backend all --device cuda --op all
+uv run python -m benchmarks.softmax --backend all --device cuda
 ```
 
 `--backend all` runs PyTorch and Triton when CUDA/Triton are available. On a
@@ -148,6 +155,17 @@ read input -> write intermediate -> read intermediate -> write output
 
 fused softmax:
 read input -> reduce -> normalize -> write output
+```
+
+Current backends:
+
+- PyTorch baseline
+- Triton fused row-wise softmax
+
+Benchmark:
+
+```bash
+uv run python -m benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
 ```
 
 ### Milestone 3: RMSNorm / LayerNorm
