@@ -7,6 +7,7 @@ name = "inference-kernel-lab"
 version = "0.1.0"
 description = "GPU kernel engineering lab for LLM inference primitives."
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
   { name = "Tony Lee" }

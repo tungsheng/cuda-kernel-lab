@@ -249,3 +249,7 @@ This project is successful if the results and docs make it easy to explain:
 - why tiled matmul improves reuse
 - why KV cache layout affects serving throughput
 - why faster kernels do not automatically solve tail latency
+
+## License
+
+MIT
