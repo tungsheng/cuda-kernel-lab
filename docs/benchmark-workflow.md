@@ -1,0 +1,72 @@
+# Benchmark Workflow
+
+Benchmarks answer one question at a time: how fast did this backend run this
+primitive for this shape and dtype?
+
+## Local Checks
+
+Run these before collecting numbers:
+
+```bash
+uv run pytest
+uv run ruff check .
+```
+
+On a CUDA host, confirm the visible device:
+
+```bash
+uv sync --group dev --extra gpu
+uv run gpu-info
+```
+
+## Run Benchmarks
+
+Memory primitives:
+
+```bash
+uv run benchmark-memory --backend all --device cuda --op all
+```
+
+Softmax:
+
+```bash
+uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
+```
+
+Normalization:
+
+```bash
+uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
+```
+
+Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
+you only want the custom Triton implementation.
+
+## Save Results
+
+Append JSONL records with `--output`:
+
+```bash
+uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
+```
+
+Each record includes:
+
+- command and parsed arguments
+- git commit and dirty flag
+- host and package versions
+- visible CUDA device metadata
+- raw latencies
+- p50, p95, p99, GB/s, and TFLOP/s
+
+Keep large result files under `experiments/results/`. That directory is ignored
+by default.
+
+## Promote A Result
+
+When a result is worth keeping:
+
+1. Write a short note with [experiments/TEMPLATE.md](../experiments/TEMPLATE.md).
+2. Add profiler details with [profiling/reports/TEMPLATE.md](../profiling/reports/TEMPLATE.md)
+   if profiler data was collected.
+3. Summarize only the smallest useful table in a concept doc.

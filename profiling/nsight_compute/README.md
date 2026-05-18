@@ -3,7 +3,7 @@
 Store Nsight Compute command notes and small exported summaries here.
 
 Large binary profiler captures are ignored by default. Prefer committing compact
-text summaries in `profiling/reports/`.
+text summaries in `profiling/reports/` using `profiling/reports/TEMPLATE.md`.
 
 Example command shape:
 

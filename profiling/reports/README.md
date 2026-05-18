@@ -1,6 +1,9 @@
 # Profiling Reports
 
-Commit short profiler writeups here. Each report should include:
+Commit short profiler writeups here. Use [TEMPLATE.md](TEMPLATE.md) for new
+reports.
+
+Each report should include:
 
 - hardware and driver context
 - command used
