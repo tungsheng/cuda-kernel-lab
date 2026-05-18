@@ -11,3 +11,9 @@ Commit short profiler writeups here. Each report should include:
 - memory throughput summary
 - occupancy or launch configuration notes
 - interpretation: memory-bound or compute-bound
+
+Suggested filename:
+
+```text
+YYYY-MM-DD-kernel-shape-device.md
+```

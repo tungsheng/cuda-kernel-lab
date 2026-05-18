@@ -18,17 +18,17 @@ Planned order:
 Run the memory primitive comparison on a CUDA host:
 
 ```bash
-uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --device cuda --op all
+uv run benchmark-memory --backend all --device cuda --op all
 ```
 
 Run the softmax comparison on a CUDA host:
 
 ```bash
-uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
+uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
 ```
 
 Run the normalization comparison on a CUDA host:
 
 ```bash
-uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all
+uv run benchmark-norms --backend all --device cuda --op all
 ```

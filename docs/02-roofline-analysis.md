@@ -6,133 +6,87 @@ Roofline analysis relates arithmetic intensity to hardware limits.
 arithmetic intensity = FLOPs / bytes moved from high bandwidth memory
 ```
 
-Low arithmetic intensity kernels are memory-bound. High arithmetic intensity
-kernels may become compute-bound if data reuse is strong enough.
+Low arithmetic intensity kernels are usually memory-bound. High arithmetic
+intensity kernels may become compute-bound when data reuse is strong enough.
 
-## Milestone 1 Primitives
+## Accounting Models
 
-Approximate memory traffic:
+The benchmark output starts with analytical estimates. Profiler counters should
+later validate or refine them.
 
-| Kernel | Reads | Writes | FLOPs | Expected Bottleneck |
-| --- | ---: | ---: | ---: | --- |
-| copy | 1 tensor | 1 tensor | 0 | memory bandwidth |
-| scale | 1 tensor | 1 tensor | 1 per element | memory bandwidth |
-| vector_add | 2 tensors | 1 tensor | 1 per element | memory bandwidth |
-| reduction_sum | 1 tensor | 1 scalar | n - 1 | memory bandwidth plus reduction overhead |
+| Primitive | HBM Traffic Model | FLOP Model | Expected Bottleneck |
+| --- | --- | --- | --- |
+| copy | read x, write out | 0 | memory bandwidth |
+| scale | read x, write out | 1 per element | memory bandwidth |
+| vector_add | read a and b, write out | 1 per element | memory bandwidth |
+| reduction_sum | read x, write scalar | n - 1 | memory bandwidth plus reduction overhead |
+| softmax fused | read row, write row | reductions, exp, divide | memory traffic plus transcendental/reduction cost |
+| RMSNorm fused | read x and weight, write out | row reduction plus scale | memory traffic plus row reduction |
+| LayerNorm fused | read x, weight, bias, write out | two row reductions plus affine | memory traffic plus row reduction |
+
+Normalization traffic intentionally counts the affine parameter vector as if it
+is read for every row. Real cache behavior can be better, so profiler notes
+should record whether parameter loads are visible for the tested shape.
 
 ## Benchmark Discipline
 
 Each benchmark should report:
 
+- shape, dtype, backend, and device
 - p50, p95, and p99 latency
-- estimated bytes moved
-- effective GB/s
-- estimated FLOPs
-- effective TFLOP/s
+- estimated bytes moved and effective GB/s
+- estimated FLOPs and effective TFLOP/s
+- command and run metadata when the result is worth keeping
 
-The first pass uses simple analytical estimates. Profiler reports should later
-replace or validate these estimates with measured memory transactions.
-
-When numbers are worth keeping, append JSONL records so later reports can be
-traced back to the command, code revision, package versions, device metadata,
-and raw latencies:
+Append durable JSONL records with:
 
 ```bash
 uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
 ```
 
-## Notes
+The JSONL record includes command arguments, git state, host and package
+versions, visible CUDA devices, raw latencies, and derived metrics.
 
-Record device-specific observations here after running:
+## First Comparisons
 
-```bash
-uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --device cuda --op all --numel 16777216 --dtype float32
-```
-
-## PyTorch vs Triton Comparison
-
-Use `--backend all` on a CUDA host to compare the PyTorch baseline with the
-Triton implementation for the same memory traffic model:
+Memory primitives:
 
 ```bash
 uv sync --group dev --extra gpu
 uv run gpu-info
-uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --device cuda --op all
+uv run benchmark-memory --backend all --device cuda --op all
 ```
 
-Record one row per backend and primitive:
+Softmax:
 
-| Backend | Kernel | Shape | dtype | p50 ms | GB/s | TFLOP/s | Interpretation |
-| --- | --- | ---: | --- | ---: | ---: | ---: | --- |
-| torch | copy | TBD | float32 | TBD | TBD | 0 | memory-bound baseline |
-| triton | copy | TBD | float32 | TBD | TBD | 0 | memory-bound custom kernel |
-| torch | vector_add | TBD | float32 | TBD | TBD | TBD | memory-bound baseline |
-| triton | vector_add | TBD | float32 | TBD | TBD | TBD | memory-bound custom kernel |
+```bash
+uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
+```
 
-The important comparison is not just latency. For these primitives, the useful
-number is effective bandwidth:
+Normalization:
+
+```bash
+uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
+```
+
+For FP16/BF16 normalization runs, include the epsilon value and correctness
+tolerance in the report. Normalization kernels can look fast while still being
+numerically wrong if accumulation dtype and epsilon handling are not explicit.
+
+## Interpreting Results
+
+For low arithmetic intensity primitives, effective bandwidth is often more
+useful than latency alone:
 
 ```text
 effective GB/s = estimated bytes moved / p50 latency
 ```
 
-If the kernel has very low arithmetic intensity and reaches a meaningful
-fraction of peak HBM bandwidth, the roofline model says additional scalar FLOP
-optimization is unlikely to move the result much. The next questions become
-coalescing, launch overhead, vectorization, occupancy, and whether fusion can
-remove reads or writes entirely.
+If a kernel reaches a meaningful fraction of practical HBM bandwidth, additional
+scalar FLOP optimization is unlikely to move the result much. The next questions
+become coalescing, launch overhead, vectorization, occupancy, cache reuse, and
+whether fusion can remove reads or writes entirely.
 
-## Softmax Fusion
-
-Softmax adds reductions and transcendental math, but the first-order roofline
-lesson is still memory movement. A naive two-kernel implementation moves about
-four tensors through HBM:
-
-```text
-read input -> write intermediate -> read intermediate -> write output
-```
-
-The fused Triton kernel moves the idealized lower bound:
-
-```text
-read input -> store output
-```
-
-Run:
-
-```bash
-uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
-```
-
-Record:
-
-| Backend | Shape | dtype | Traffic Model | p50 ms | GB/s | Interpretation |
-| --- | ---: | --- | --- | ---: | ---: | --- |
-| torch | 4096x1024 | float32 | fused | TBD | TBD | library baseline |
-| triton | 4096x1024 | float32 | fused | TBD | TBD | fused custom kernel |
-
-## Normalization
-
-RMSNorm and LayerNorm have low arithmetic intensity for typical transformer
-hidden sizes because each row is read, reduced, scaled, and written. The fused
-Triton kernels avoid extra intermediate tensors, but each output element still
-depends on a row-level reduction.
-
-Run:
-
-```bash
-uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
-```
-
-Record:
-
-| Backend | Kernel | Shape | dtype | p50 ms | GB/s | TFLOP/s | Interpretation |
-| --- | --- | ---: | --- | ---: | ---: | ---: | --- |
-| torch | RMSNorm | 4096x4096 | float32 | TBD | TBD | TBD | baseline |
-| triton | RMSNorm | 4096x4096 | float32 | TBD | TBD | TBD | fused custom kernel |
-| torch | LayerNorm | 4096x4096 | float32 | TBD | TBD | TBD | baseline |
-| triton | LayerNorm | 4096x4096 | float32 | TBD | TBD | TBD | fused custom kernel |
-
-For FP16/BF16 runs, include the epsilon value and correctness tolerance in the
-report. Normalization kernels can look fast while still being numerically wrong
-if accumulation dtype and epsilon handling are not explicit.
+For fused kernels, compare both latency and the traffic denominator. A fused
+softmax run with the `naive` traffic model does not change the kernel; it shows
+the memory traffic a two-kernel implementation would have paid.

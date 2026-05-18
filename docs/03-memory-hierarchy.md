@@ -1,6 +1,8 @@
 # Memory Hierarchy
 
-This note captures how each kernel uses the GPU memory hierarchy.
+This note captures how each kernel uses the GPU memory hierarchy. Prefer
+recording observations from benchmark and profiler runs over general hardware
+facts.
 
 ## Levels To Track
 
@@ -20,6 +22,7 @@ For each implementation, document:
 - shared memory footprint per block
 - register pressure if visible in profiler output
 - cache hit behavior if relevant
+- whether output buffers are reused during timing
 
 ## Normalization Kernels
 
@@ -52,5 +55,5 @@ Precision notes:
 Run on a CUDA host:
 
 ```bash
-uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
+uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
 ```

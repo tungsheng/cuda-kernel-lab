@@ -8,6 +8,5 @@ text summaries in `profiling/reports/`.
 Example command shape:
 
 ```bash
-ncu --set full --target-processes all python -m inference_kernel_lab.benchmarks.memory_bandwidth --op vector_add
+ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add
 ```
-
