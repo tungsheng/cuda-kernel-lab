@@ -88,6 +88,12 @@ Run the Milestone 2 softmax benchmark:
 uv run python -m benchmarks.softmax --backend all --rows 4096 --cols 1024 --dtype float32
 ```
 
+Run the Milestone 3 normalization benchmark:
+
+```bash
+uv run python -m benchmarks.norms --backend all --op all --rows 4096 --cols 4096 --dtype float32
+```
+
 Example output columns:
 
 ```text
@@ -108,6 +114,7 @@ uv run gpu-info
 uv run pytest
 uv run python -m benchmarks.memory_bandwidth --backend all --device cuda --op all
 uv run python -m benchmarks.softmax --backend all --device cuda
+uv run python -m benchmarks.norms --backend all --device cuda --op all
 ```
 
 `--backend all` runs PyTorch and Triton when CUDA/Triton are available. On a
@@ -172,6 +179,17 @@ uv run python -m benchmarks.softmax --backend all --device cuda --rows 4096 --co
 
 Forward-only normalization kernels for inference. Focus on reductions,
 vectorized loads, epsilon stability, and FP16/BF16 behavior.
+
+Current backends:
+
+- PyTorch RMSNorm and LayerNorm baselines
+- Triton fused row-wise RMSNorm and LayerNorm forward kernels
+
+Benchmark:
+
+```bash
+uv run python -m benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
+```
 
 ### Milestone 4: SwiGLU Fusion
 

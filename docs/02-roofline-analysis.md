@@ -102,3 +102,29 @@ Record:
 | --- | ---: | --- | --- | ---: | ---: | --- |
 | torch | 4096x1024 | float32 | fused | TBD | TBD | library baseline |
 | triton | 4096x1024 | float32 | fused | TBD | TBD | fused custom kernel |
+
+## Normalization
+
+RMSNorm and LayerNorm have low arithmetic intensity for typical transformer
+hidden sizes because each row is read, reduced, scaled, and written. The fused
+Triton kernels avoid extra intermediate tensors, but each output element still
+depends on a row-level reduction.
+
+Run:
+
+```bash
+uv run python -m benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
+```
+
+Record:
+
+| Backend | Kernel | Shape | dtype | p50 ms | GB/s | TFLOP/s | Interpretation |
+| --- | --- | ---: | --- | ---: | ---: | ---: | --- |
+| torch | RMSNorm | 4096x4096 | float32 | TBD | TBD | TBD | baseline |
+| triton | RMSNorm | 4096x4096 | float32 | TBD | TBD | TBD | fused custom kernel |
+| torch | LayerNorm | 4096x4096 | float32 | TBD | TBD | TBD | baseline |
+| triton | LayerNorm | 4096x4096 | float32 | TBD | TBD | TBD | fused custom kernel |
+
+For FP16/BF16 runs, include the epsilon value and correctness tolerance in the
+report. Normalization kernels can look fast while still being numerically wrong
+if accumulation dtype and epsilon handling are not explicit.
