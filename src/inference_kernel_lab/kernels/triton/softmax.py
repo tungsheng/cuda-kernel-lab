@@ -20,14 +20,10 @@ MAX_BLOCK_SIZE = 131_072
 def is_available() -> bool:
     """Return true when Triton and a CUDA-capable PyTorch runtime are available."""
 
-    return bool(
-        torch is not None
-        and triton is not None
-        and torch.cuda.is_available()
-    )
+    return bool(torch is not None and triton is not None and torch.cuda.is_available())
 
 
-def softmax(x: Any) -> Any:
+def softmax(x: Any, *, out: Any | None = None) -> Any:
     """Return row-wise softmax over the last dimension using one fused kernel."""
 
     _require_triton_matrix(x)
@@ -38,7 +34,8 @@ def softmax(x: Any) -> Any:
             f"Triton softmax supports up to {MAX_BLOCK_SIZE} columns after padding; got {cols}"
         )
 
-    out = torch.empty_like(x)
+    out = torch.empty_like(x) if out is None else out
+    _require_softmax_output(x, out)
     _softmax_kernel[(rows,)](
         x,
         out,
@@ -65,6 +62,15 @@ def _require_triton_matrix(x: Any) -> None:
         raise ValueError("row-wise softmax requires at least one column")
     if x.stride(1) != 1:
         raise ValueError("Triton softmax requires the last dimension to be contiguous.")
+
+
+def _require_softmax_output(x: Any, out: Any) -> None:
+    if getattr(out, "shape", None) != getattr(x, "shape", None):
+        raise ValueError(f"output shape must match input shape: {out.shape} != {x.shape}")
+    if not getattr(out, "is_cuda", False):
+        raise RuntimeError("Triton softmax output must be a CUDA tensor.")
+    if out.stride(1) != 1:
+        raise ValueError("Triton softmax requires contiguous output rows.")
 
 
 def _next_power_of_2(value: int) -> int:

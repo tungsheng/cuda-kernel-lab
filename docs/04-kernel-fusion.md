@@ -40,7 +40,7 @@ load row -> subtract max -> exp -> reduce sum -> normalize -> store row
 Run the comparison on a CUDA host:
 
 ```bash
-uv run python -m benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
+uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
 ```
 
 The default benchmark traffic model is `fused`, which reports the idealized
@@ -48,7 +48,7 @@ lower-bound HBM movement for PyTorch and Triton. To see the memory traffic a
 naive implementation would pay, rerun with:
 
 ```bash
-uv run python -m benchmarks.softmax --backend triton --device cuda --traffic-model naive
+uv run python -m inference_kernel_lab.benchmarks.softmax --backend triton --device cuda --traffic-model naive
 ```
 
 That second command does not make the Triton kernel naive; it changes the

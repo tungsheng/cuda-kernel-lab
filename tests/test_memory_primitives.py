@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-torch = pytest.importorskip("torch")
+try:
+    import torch
+except ImportError:
+    torch = None
 
-from kernels.torch_baselines import memory as torch_memory  # noqa: E402
-from kernels.torch_baselines.memory import (  # noqa: E402
-    flop_count,
-    memory_traffic_bytes,
-)
-from kernels.triton import memory as triton_memory  # noqa: E402
+from inference_kernel_lab.kernels.torch_baselines import memory as torch_memory
+from inference_kernel_lab.kernels.triton import memory as triton_memory
+from inference_kernel_lab.ops.memory import flop_count, memory_traffic_bytes
+
+requires_torch = pytest.mark.skipif(torch is None, reason="torch is not installed")
 
 
 def available_backends() -> list[tuple[str, object]]:
@@ -19,6 +21,7 @@ def available_backends() -> list[tuple[str, object]]:
     return backends
 
 
+@requires_torch
 @pytest.mark.parametrize(("backend_name", "backend"), available_backends())
 def test_vector_add_matches_torch(backend_name: str, backend: object) -> None:
     device = "cuda" if backend_name == "triton" else "cpu"
@@ -28,6 +31,7 @@ def test_vector_add_matches_torch(backend_name: str, backend: object) -> None:
     torch.testing.assert_close(backend.vector_add(a, b), a + b)
 
 
+@requires_torch
 @pytest.mark.parametrize(("backend_name", "backend"), available_backends())
 def test_copy_materializes_equal_tensor(backend_name: str, backend: object) -> None:
     device = "cuda" if backend_name == "triton" else "cpu"
@@ -38,6 +42,7 @@ def test_copy_materializes_equal_tensor(backend_name: str, backend: object) -> N
     assert out.data_ptr() != x.data_ptr()
 
 
+@requires_torch
 @pytest.mark.parametrize(("backend_name", "backend"), available_backends())
 def test_scale_matches_torch(backend_name: str, backend: object) -> None:
     device = "cuda" if backend_name == "triton" else "cpu"
@@ -46,6 +51,7 @@ def test_scale_matches_torch(backend_name: str, backend: object) -> None:
     torch.testing.assert_close(backend.scale(x, 0.25), x * 0.25)
 
 
+@requires_torch
 @pytest.mark.parametrize(("backend_name", "backend"), available_backends())
 def test_reduction_sum_matches_torch(backend_name: str, backend: object) -> None:
     device = "cuda" if backend_name == "triton" else "cpu"
@@ -68,6 +74,7 @@ def test_flop_estimates() -> None:
     assert flop_count("reduction_sum", numel=10) == 9
 
 
+@requires_torch
 def test_vector_add_rejects_shape_mismatch() -> None:
     with pytest.raises(ValueError, match="shape mismatch"):
         torch_memory.vector_add(torch.randn(4), torch.randn(5))

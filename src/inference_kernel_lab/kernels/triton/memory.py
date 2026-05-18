@@ -20,37 +20,52 @@ DEFAULT_BLOCK_SIZE = 1024
 def is_available() -> bool:
     """Return true when Triton and a CUDA-capable PyTorch runtime are available."""
 
-    return bool(
-        torch is not None
-        and triton is not None
-        and torch.cuda.is_available()
-    )
+    return bool(torch is not None and triton is not None and torch.cuda.is_available())
 
 
-def vector_add(a: Any, b: Any, *, block_size: int = DEFAULT_BLOCK_SIZE) -> Any:
+def vector_add(
+    a: Any,
+    b: Any,
+    *,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+    out: Any | None = None,
+) -> Any:
     """Return elementwise a + b using a Triton kernel."""
 
     _require_same_shape(a, b)
     _require_triton_tensor(a)
-    out = torch.empty_like(a)
+    _require_triton_tensor(b)
+    out = torch.empty_like(a) if out is None else out
+    _require_same_shape(a, out)
+    _require_triton_tensor(out)
     _vector_add_kernel[_grid(a.numel(), block_size)](a, b, out, a.numel(), block_size)
     return out
 
 
-def copy(x: Any, *, block_size: int = DEFAULT_BLOCK_SIZE) -> Any:
+def copy(x: Any, *, block_size: int = DEFAULT_BLOCK_SIZE, out: Any | None = None) -> Any:
     """Return a materialized copy of x using a Triton kernel."""
 
     _require_triton_tensor(x)
-    out = torch.empty_like(x)
+    out = torch.empty_like(x) if out is None else out
+    _require_same_shape(x, out)
+    _require_triton_tensor(out)
     _copy_kernel[_grid(x.numel(), block_size)](x, out, x.numel(), block_size)
     return out
 
 
-def scale(x: Any, alpha: float, *, block_size: int = DEFAULT_BLOCK_SIZE) -> Any:
+def scale(
+    x: Any,
+    alpha: float,
+    *,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+    out: Any | None = None,
+) -> Any:
     """Return x scaled by alpha using a Triton kernel."""
 
     _require_triton_tensor(x)
-    out = torch.empty_like(x)
+    out = torch.empty_like(x) if out is None else out
+    _require_same_shape(x, out)
+    _require_triton_tensor(out)
     _scale_kernel[_grid(x.numel(), block_size)](x, out, alpha, x.numel(), block_size)
     return out
 

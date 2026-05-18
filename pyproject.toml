@@ -17,6 +17,9 @@ dependencies = [
 
 [project.scripts]
 gpu-info = "inference_kernel_lab.gpu_info:main"
+benchmark-memory = "inference_kernel_lab.benchmarks.memory_bandwidth:main"
+benchmark-softmax = "inference_kernel_lab.benchmarks.softmax:main"
+benchmark-norms = "inference_kernel_lab.benchmarks.norms:main"
 
 [project.optional-dependencies]
 gpu = [
@@ -30,11 +33,13 @@ dev = [
   "ruff>=0.6",
 ]
 
+[tool.setuptools]
+package-dir = { "" = "src" }
+
 [tool.setuptools.packages.find]
+where = ["src"]
 include = [
   "inference_kernel_lab*",
-  "kernels*",
-  "benchmarks*",
 ]
 
 [tool.pytest.ini_options]

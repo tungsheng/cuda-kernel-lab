@@ -19,4 +19,3 @@ def main() -> None:
         print(f"  compute capability: {capability}")
         print(f"  memory: {device.total_memory_gib:.2f} GiB")
         print(f"  multiprocessors: {sm_count}")
-

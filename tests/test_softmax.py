@@ -7,13 +7,10 @@ try:
 except ImportError:
     torch = None
 
-from kernels.torch_baselines import softmax as torch_softmax
-from kernels.torch_baselines.softmax import (
-    flop_count,
-    memory_traffic_bytes,
-)
-from kernels.triton.softmax import is_available as triton_is_available
-from kernels.triton.softmax import softmax as triton_softmax
+from inference_kernel_lab.kernels.torch_baselines import softmax as torch_softmax
+from inference_kernel_lab.kernels.triton.softmax import is_available as triton_is_available
+from inference_kernel_lab.kernels.triton.softmax import softmax as triton_softmax
+from inference_kernel_lab.ops.softmax import flop_count, memory_traffic_bytes
 
 requires_torch = pytest.mark.skipif(torch is None, reason="torch is not installed")
 

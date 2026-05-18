@@ -20,20 +20,17 @@ MAX_BLOCK_SIZE = 131_072
 def is_available() -> bool:
     """Return true when Triton and a CUDA-capable PyTorch runtime are available."""
 
-    return bool(
-        torch is not None
-        and triton is not None
-        and torch.cuda.is_available()
-    )
+    return bool(torch is not None and triton is not None and torch.cuda.is_available())
 
 
-def rmsnorm(x: Any, weight: Any, *, eps: float = 1e-6) -> Any:
+def rmsnorm(x: Any, weight: Any, *, eps: float = 1e-6, out: Any | None = None) -> Any:
     """Return row-wise RMSNorm over the last dimension using one Triton kernel."""
 
     _require_norm_inputs(x, weight)
     rows, cols = x.shape
     block_size = _block_size(cols)
-    out = torch.empty_like(x)
+    out = torch.empty_like(x) if out is None else out
+    _require_norm_output(x, out)
     _rmsnorm_kernel[(rows,)](
         x,
         weight,
@@ -48,13 +45,21 @@ def rmsnorm(x: Any, weight: Any, *, eps: float = 1e-6) -> Any:
     return out
 
 
-def layernorm(x: Any, weight: Any, bias: Any, *, eps: float = 1e-5) -> Any:
+def layernorm(
+    x: Any,
+    weight: Any,
+    bias: Any,
+    *,
+    eps: float = 1e-5,
+    out: Any | None = None,
+) -> Any:
     """Return row-wise LayerNorm over the last dimension using one Triton kernel."""
 
     _require_norm_inputs(x, weight, bias)
     rows, cols = x.shape
     block_size = _block_size(cols)
-    out = torch.empty_like(x)
+    out = torch.empty_like(x) if out is None else out
+    _require_norm_output(x, out)
     _layernorm_kernel[(rows,)](
         x,
         weight,
@@ -99,6 +104,15 @@ def _require_norm_inputs(x: Any, weight: Any, bias: Any | None = None) -> None:
         raise ValueError("Triton normalization requires contiguous weights.")
     if bias is not None and bias.stride(0) != 1:
         raise ValueError("Triton LayerNorm requires a contiguous bias.")
+
+
+def _require_norm_output(x: Any, out: Any) -> None:
+    if getattr(out, "shape", None) != getattr(x, "shape", None):
+        raise ValueError(f"output shape must match input shape: {out.shape} != {x.shape}")
+    if not getattr(out, "is_cuda", False):
+        raise RuntimeError("Triton normalization output must be a CUDA tensor.")
+    if out.stride(1) != 1:
+        raise ValueError("Triton normalization requires contiguous output rows.")
 
 
 def _block_size(cols: int) -> int:

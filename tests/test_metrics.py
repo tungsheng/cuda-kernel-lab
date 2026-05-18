@@ -18,4 +18,3 @@ def test_percentile_rejects_empty_input() -> None:
 def test_percentile_rejects_invalid_percent() -> None:
     with pytest.raises(ValueError, match="between 0 and 100"):
         percentile([1], 101)
-

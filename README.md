@@ -28,20 +28,21 @@ back to an inference bottleneck and answer a small set of performance questions:
 inference-kernel-lab/
 ├── README.md
 ├── pyproject.toml
-├── inference_kernel_lab/
-│   ├── benchmark.py
-│   ├── device.py
-│   ├── gpu_info.py
-│   └── metrics.py
-├── kernels/
-│   ├── torch_baselines/
-│   ├── triton/
-│   └── cuda/
-├── benchmarks/
+├── src/
+│   └── inference_kernel_lab/
+│       ├── benchmark.py
+│       ├── benchmark_cli.py
+│       ├── device.py
+│       ├── gpu_info.py
+│       ├── metrics.py
+│       ├── ops/
+│       ├── kernels/
+│       └── benchmarks/
 ├── tests/
 ├── profiling/
 │   ├── nsight_compute/
 │   └── reports/
+├── experiments/
 ├── docs/
 └── scripts/
 ```
@@ -79,19 +80,25 @@ uv run gpu-info
 Run the Milestone 0/1 memory benchmark:
 
 ```bash
-uv run python -m benchmarks.memory_bandwidth --backend all --op all --numel 16777216 --dtype float32
+uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --op all --numel 16777216 --dtype float32
 ```
 
 Run the Milestone 2 softmax benchmark:
 
 ```bash
-uv run python -m benchmarks.softmax --backend all --rows 4096 --cols 1024 --dtype float32
+uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --rows 4096 --cols 1024 --dtype float32
 ```
 
 Run the Milestone 3 normalization benchmark:
 
 ```bash
-uv run python -m benchmarks.norms --backend all --op all --rows 4096 --cols 4096 --dtype float32
+uv run python -m inference_kernel_lab.benchmarks.norms --backend all --op all --rows 4096 --cols 4096 --dtype float32
+```
+
+Append reproducible JSONL records with run metadata:
+
+```bash
+uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
 ```
 
 Example output columns:
@@ -112,14 +119,18 @@ Use this checklist before collecting benchmark numbers:
 uv sync --group dev --extra gpu
 uv run gpu-info
 uv run pytest
-uv run python -m benchmarks.memory_bandwidth --backend all --device cuda --op all
-uv run python -m benchmarks.softmax --backend all --device cuda
-uv run python -m benchmarks.norms --backend all --device cuda --op all
+uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --device cuda --op all
+uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --device cuda
+uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all
 ```
 
 `--backend all` runs PyTorch and Triton when CUDA/Triton are available. On a
 CPU-only host it runs the PyTorch backend only, so local development still stays
 fast and boring in the best possible way.
+
+Use `--output <path>.jsonl` for benchmark runs that should be compared later.
+Each output line includes the command, arguments, git commit, dirty flag, host,
+package versions, visible CUDA devices, raw latencies, and derived metrics.
 
 ## Milestones
 
@@ -172,7 +183,7 @@ Current backends:
 Benchmark:
 
 ```bash
-uv run python -m benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
+uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
 ```
 
 ### Milestone 3: RMSNorm / LayerNorm
@@ -188,7 +199,7 @@ Current backends:
 Benchmark:
 
 ```bash
-uv run python -m benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
+uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
 ```
 
 ### Milestone 4: SwiGLU Fusion

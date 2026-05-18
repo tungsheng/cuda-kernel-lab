@@ -39,4 +39,3 @@ def dtype_size_bytes(dtype: object) -> int:
     if text.endswith("float64") or text.endswith("int64"):
         return 8
     raise ValueError(f"unsupported dtype for byte-size estimate: {dtype}")
-

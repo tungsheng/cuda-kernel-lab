@@ -1,15 +1,6 @@
-"""PyTorch baseline for row-wise softmax."""
+"""Accounting models for row-wise softmax."""
 
 from __future__ import annotations
-
-from typing import Any
-
-
-def softmax(x: Any) -> Any:
-    """Return row-wise softmax over the last dimension of a 2D tensor."""
-
-    _require_2d(x)
-    return x.softmax(dim=-1)
 
 
 def memory_traffic_bytes(
@@ -51,9 +42,3 @@ def flop_count(*, rows: int, cols: int) -> int:
 
     # Per row: max reduction, subtract, exp, sum reduction, divide.
     return rows * (2 * max(cols - 1, 0) + 3 * cols)
-
-
-def _require_2d(x: Any) -> None:
-    if getattr(x, "ndim", None) != 2:
-        ndim = getattr(x, "ndim", None)
-        raise ValueError(f"row-wise softmax requires a 2D tensor, got ndim={ndim}")

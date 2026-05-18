@@ -33,12 +33,20 @@ Each benchmark should report:
 The first pass uses simple analytical estimates. Profiler reports should later
 replace or validate these estimates with measured memory transactions.
 
+When numbers are worth keeping, append JSONL records so later reports can be
+traced back to the command, code revision, package versions, device metadata,
+and raw latencies:
+
+```bash
+uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
+```
+
 ## Notes
 
 Record device-specific observations here after running:
 
 ```bash
-uv run python -m benchmarks.memory_bandwidth --backend all --device cuda --op all --numel 16777216 --dtype float32
+uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --device cuda --op all --numel 16777216 --dtype float32
 ```
 
 ## PyTorch vs Triton Comparison
@@ -49,7 +57,7 @@ Triton implementation for the same memory traffic model:
 ```bash
 uv sync --group dev --extra gpu
 uv run gpu-info
-uv run python -m benchmarks.memory_bandwidth --backend all --device cuda --op all
+uv run python -m inference_kernel_lab.benchmarks.memory_bandwidth --backend all --device cuda --op all
 ```
 
 Record one row per backend and primitive:
@@ -93,7 +101,7 @@ read input -> store output
 Run:
 
 ```bash
-uv run python -m benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
+uv run python -m inference_kernel_lab.benchmarks.softmax --backend all --device cuda --rows 4096 --cols 1024
 ```
 
 Record:
@@ -113,7 +121,7 @@ depends on a row-level reduction.
 Run:
 
 ```bash
-uv run python -m benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
+uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
 ```
 
 Record:

@@ -52,5 +52,5 @@ Precision notes:
 Run on a CUDA host:
 
 ```bash
-uv run python -m benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
+uv run python -m inference_kernel_lab.benchmarks.norms --backend all --device cuda --op all --rows 4096 --cols 4096
 ```

@@ -47,4 +47,3 @@ def _try_import_torch() -> Any | None:
     except ImportError:
         return None
     return torch
-

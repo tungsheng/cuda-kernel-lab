@@ -62,6 +62,7 @@ temp/
 profiling/**/captures/
 profiling/**/raw/
 benchmarks/results/
+experiments/results/
 
 # Large model/data artifacts should be downloaded or generated locally.
 *.bin
