@@ -12,6 +12,9 @@ from pathlib import Path
 KEY_METRICS = {
     "gpu__time_duration.sum": "Kernel time",
     "dram__throughput.avg.pct_of_peak_sustained_elapsed": "DRAM throughput",
+    "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed": "DRAM throughput",
+    "dram__bytes_read.sum": "DRAM bytes read",
+    "dram__bytes_write.sum": "DRAM bytes written",
     "sm__warps_active.avg.pct_of_peak_sustained_active": "Occupancy",
     "launch__registers_per_thread": "Registers per thread",
     "launch__shared_mem_per_block_static": "Static shared memory per block",
@@ -120,6 +123,10 @@ def _metrics_from_csv(text: str) -> list[NsightMetric]:
     if sample is None:
         return []
 
+    wide_metrics = _metrics_from_wide_csv(sample)
+    if wide_metrics:
+        return wide_metrics
+
     reader = csv.DictReader(sample.splitlines())
     if reader.fieldnames is None:
         return []
@@ -140,6 +147,41 @@ def _metrics_from_csv(text: str) -> list[NsightMetric]:
             )
         )
     return metrics
+
+
+def _metrics_from_wide_csv(text: str) -> list[NsightMetric]:
+    rows = list(csv.reader(text.splitlines()))
+    if len(rows) < 3:
+        return []
+
+    for index, header in enumerate(rows[:-2]):
+        if "ID" not in header and "Kernel Name" not in header:
+            continue
+        if not any(metric_name in header for metric_name in KEY_METRICS):
+            continue
+
+        units = rows[index + 1]
+        values = rows[index + 2]
+        metrics = []
+        for metric_name, label in KEY_METRICS.items():
+            if metric_name not in header:
+                continue
+            column = header.index(metric_name)
+            value = values[column].strip() if column < len(values) else ""
+            if not value:
+                continue
+            unit = units[column].strip() if column < len(units) else ""
+            metrics.append(
+                NsightMetric(
+                    label=label,
+                    name=metric_name,
+                    value=value,
+                    unit=unit,
+                )
+            )
+        return metrics
+
+    return []
 
 
 def _csv_sample(text: str) -> str | None:

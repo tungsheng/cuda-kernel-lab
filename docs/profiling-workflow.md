@@ -16,28 +16,39 @@ Record:
 
 ## Nsight Compute
 
+For the standard AWS evidence path, let the lifecycle wrapper collect focused
+profiles and compact summaries:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --with-profiling
+```
+
 Example command shape:
 
 ```bash
-ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add
+sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
+  uv run benchmark-memory --backend triton --device cuda --op vector_add
 ```
+
+On the AWS Deep Learning AMI, run `ncu` with passwordless `sudo`; otherwise
+Nsight Compute can fail with NVIDIA performance-counter permission errors.
 
 Suggested profiler targets:
 
 ```bash
-ncu --set full --target-processes all \
+sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-memory --backend triton --device cuda --op vector_add \
   --dtype float32 \
   --output experiments/results/aws-ec2/<run-id>-profiled/memory-profiled.jsonl
-ncu --set full --target-processes all \
+sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-softmax --backend triton --device cuda \
   --rows 4096 --cols 1024 --dtype float32 \
   --output experiments/results/aws-ec2/<run-id>-profiled/softmax-profiled.jsonl
-ncu --set full --target-processes all \
+sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-swiglu --backend triton --device cuda \
   --rows 4096 --cols 4096 --dtype float32 \
   --output experiments/results/aws-ec2/<run-id>-profiled/swiglu-profiled.jsonl
-ncu --set full --target-processes all \
+sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-matmul --backend triton --device cuda \
   --m 1024 --n 1024 --k 1024 --dtype float16 \
   --output experiments/results/aws-ec2/<run-id>-profiled/matmul-profiled.jsonl

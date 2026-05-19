@@ -18,6 +18,16 @@ Live-GPU evidence run on disposable AWS EC2:
 This writes raw JSONL under `experiments/results/aws-ec2/<run-id>/` and a
 compact report under `experiments/reports/aws-ec2/<run-id>.md`.
 
+Add profiler evidence when the benchmark report points at a specific bottleneck:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --with-profiling
+```
+
+This also writes Nsight Compute CSV exports under
+`profiling/nsight_compute/<run-id>/` and compact profiler notes under
+`profiling/reports/<run-id>/`.
+
 Manual live-GPU matrix collection:
 
 ```bash

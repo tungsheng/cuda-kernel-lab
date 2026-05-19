@@ -8,7 +8,8 @@ text summaries in `profiling/reports/` using `profiling/reports/TEMPLATE.md`.
 Example command shape:
 
 ```bash
-ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add
+sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
+  uv run benchmark-memory --backend triton --device cuda --op vector_add
 ```
 
 When exporting a small text or CSV summary, convert it with:

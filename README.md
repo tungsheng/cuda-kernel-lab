@@ -47,6 +47,12 @@ key cleanup.
 ./scripts/live-benchmark --run-id <run-id>
 ```
 
+Add focused Nsight Compute profiler captures to the same disposable session:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --with-profiling
+```
+
 Use lower-level commands only when you want to inspect the host manually:
 
 ```bash
