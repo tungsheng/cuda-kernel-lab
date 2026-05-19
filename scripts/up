@@ -1,0 +1,427 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/_common.sh"
+
+TF_DIR="${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}"
+TF_VARS_FILE="${CUDA_KERNEL_LAB_TF_VARS_FILE:-${TF_DIR}/local.auto.tfvars}"
+STATE_DIR="${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}"
+
+AWS_REGION_NAME="${AWS_REGION:-us-west-2}"
+AWS_PROFILE_NAME="${AWS_PROFILE:-}"
+INSTANCE_TYPE="g5.xlarge"
+INSTANCE_NAME="cuda-kernel-lab-gpu"
+VOLUME_SIZE_GB=100
+AMI_SSM_PARAMETER="/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id"
+SSH_USER="ubuntu"
+REMOTE_DIR="cuda-kernel-lab"
+
+KEY_NAME=""
+KEY_FILE=""
+SUBNET_ID=""
+VPC_ID=""
+SECURITY_GROUP_ID=""
+INGRESS_CIDR=""
+ASSOCIATE_PUBLIC_IP=1
+SKIP_BOOTSTRAP=0
+
+INSTANCE_ID=""
+SSH_HOST=""
+
+usage() {
+  cat <<EOF
+Usage:
+  ./scripts/up --key-name <ec2-key-pair> [--key-file <path-to-pem>]
+
+Uses Terraform to create one disposable AWS EC2 GPU host for CUDA benchmark
+runs, then optionally syncs this repo and bootstraps the benchmark environment.
+
+Options:
+  --key-name <name>             Required EC2 key pair name.
+  --key-file <path>             SSH private key. Enables repo sync and bootstrap.
+  --profile <name>              AWS CLI profile used by Terraform.
+  --region <name>               AWS region. Default: ${AWS_REGION_NAME}
+  --instance-type <type>        EC2 GPU instance. Default: ${INSTANCE_TYPE}
+  --name <name>                 EC2 Name tag. Default: ${INSTANCE_NAME}
+  --volume-size-gb <gb>         Root EBS size. Default: ${VOLUME_SIZE_GB}
+  --ami-ssm-parameter <name>    Public SSM parameter for the DLAMI.
+  --vpc-id <id>                 Existing VPC for Terraform-created SSH security group.
+  --subnet-id <id>              Existing subnet. Defaults to a default subnet.
+  --security-group-id <id>      Existing security group. Defaults to Terraform-created SSH group.
+  --ingress-cidr <cidr>         SSH source CIDR for Terraform-created security group.
+  --ssh-user <name>             SSH user. Default: ${SSH_USER}
+  --remote-dir <path>           Remote repo directory under the SSH user's home.
+  --no-public-ip                Do not associate a public IPv4 address.
+  --skip-bootstrap              Create infra only; do not SSH, sync, or install dependencies.
+  --tf-dir <path>               Terraform environment. Default: ${TF_DIR}
+  --tf-vars-file <path>         Local auto tfvars file. Default: ${TF_VARS_FILE}
+
+Examples:
+  ./scripts/up --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
+  ./scripts/up --profile personal --instance-type g6.xlarge --key-name kernel-lab
+  ./scripts/down
+EOF
+}
+
+parse_args() {
+  while (($# > 0)); do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --key-name)
+        require_value "$1" "${2:-}"
+        KEY_NAME=${2:-}
+        shift 2
+        ;;
+      --key-file)
+        require_value "$1" "${2:-}"
+        KEY_FILE=$(expand_path "${2:-}")
+        shift 2
+        ;;
+      --profile)
+        require_value "$1" "${2:-}"
+        AWS_PROFILE_NAME=${2:-}
+        shift 2
+        ;;
+      --region)
+        require_value "$1" "${2:-}"
+        AWS_REGION_NAME=${2:-}
+        shift 2
+        ;;
+      --instance-type)
+        require_value "$1" "${2:-}"
+        INSTANCE_TYPE=${2:-}
+        shift 2
+        ;;
+      --name)
+        require_value "$1" "${2:-}"
+        INSTANCE_NAME=${2:-}
+        shift 2
+        ;;
+      --volume-size-gb)
+        require_value "$1" "${2:-}"
+        VOLUME_SIZE_GB=${2:-}
+        shift 2
+        ;;
+      --ami-ssm-parameter)
+        require_value "$1" "${2:-}"
+        AMI_SSM_PARAMETER=${2:-}
+        shift 2
+        ;;
+      --vpc-id)
+        require_value "$1" "${2:-}"
+        VPC_ID=${2:-}
+        shift 2
+        ;;
+      --subnet-id)
+        require_value "$1" "${2:-}"
+        SUBNET_ID=${2:-}
+        shift 2
+        ;;
+      --security-group-id)
+        require_value "$1" "${2:-}"
+        SECURITY_GROUP_ID=${2:-}
+        shift 2
+        ;;
+      --ingress-cidr)
+        require_value "$1" "${2:-}"
+        INGRESS_CIDR=${2:-}
+        shift 2
+        ;;
+      --ssh-user)
+        require_value "$1" "${2:-}"
+        SSH_USER=${2:-}
+        shift 2
+        ;;
+      --remote-dir)
+        require_value "$1" "${2:-}"
+        REMOTE_DIR=${2:-}
+        shift 2
+        ;;
+      --no-public-ip)
+        ASSOCIATE_PUBLIC_IP=0
+        shift
+        ;;
+      --skip-bootstrap)
+        SKIP_BOOTSTRAP=1
+        shift
+        ;;
+      --tf-dir)
+        require_value "$1" "${2:-}"
+        TF_DIR=$(expand_path "${2:-}")
+        shift 2
+        ;;
+      --tf-vars-file)
+        require_value "$1" "${2:-}"
+        TF_VARS_FILE=$(expand_path "${2:-}")
+        shift 2
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
+check_prereqs() {
+  require_commands terraform
+
+  if [[ -z "${SECURITY_GROUP_ID}" && -z "${INGRESS_CIDR}" ]]; then
+    require_commands curl
+  fi
+
+  if [[ "${SKIP_BOOTSTRAP}" == "0" && -n "${KEY_FILE}" ]]; then
+    require_commands ssh tar
+  fi
+}
+
+validate_inputs() {
+  [[ -n "${KEY_NAME}" ]] || die "--key-name is required"
+  [[ "${VOLUME_SIZE_GB}" =~ ^[0-9]+$ ]] || die "--volume-size-gb must be an integer"
+  ((VOLUME_SIZE_GB >= 40)) || die "--volume-size-gb must be at least 40"
+  [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
+  [[ "${SSH_USER}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] || die "--ssh-user contains unsafe characters"
+  [[ "${REMOTE_DIR}" =~ ^[A-Za-z0-9._/-]+$ ]] || die "--remote-dir contains unsafe characters"
+  [[ "${REMOTE_DIR}" != /* && "${REMOTE_DIR}" != *..* ]] || die "--remote-dir must be a relative path without '..'"
+  [[ "${REMOTE_DIR}" != "." && "${REMOTE_DIR}" != .* && "${REMOTE_DIR}" != */.* ]] || die "--remote-dir must not target hidden or current-directory paths"
+
+  if [[ -n "${KEY_FILE}" && ! -f "${KEY_FILE}" ]]; then
+    die "SSH key file does not exist: ${KEY_FILE}"
+  fi
+
+  if [[ "${SKIP_BOOTSTRAP}" == "0" && -z "${KEY_FILE}" ]]; then
+    printf 'No --key-file was provided; Terraform will create infra without SSH bootstrap.\n'
+    SKIP_BOOTSTRAP=1
+  fi
+}
+
+configure_aws_profile() {
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    export AWS_PROFILE="${AWS_PROFILE_NAME}"
+  fi
+}
+
+resolve_ingress_cidr() {
+  local public_ip
+
+  if [[ -n "${SECURITY_GROUP_ID}" || -n "${INGRESS_CIDR}" ]]; then
+    return
+  fi
+
+  public_ip=$(curl -fsS --max-time 10 https://checkip.amazonaws.com | tr -d '[:space:]') || {
+    die "could not discover public IP; pass --ingress-cidr"
+  }
+  [[ -n "${public_ip}" ]] || die "empty public IP discovery response; pass --ingress-cidr"
+
+  INGRESS_CIDR="${public_ip}/32"
+}
+
+hcl_string() {
+  local value=$1
+
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  printf '"%s"' "${value}"
+}
+
+write_optional_string_var() {
+  local name=$1
+  local value=$2
+
+  if [[ -n "${value}" ]]; then
+    printf '%s = ' "${name}"
+    hcl_string "${value}"
+    printf '\n'
+  fi
+}
+
+write_tfvars() {
+  mkdir -p "$(dirname "${TF_VARS_FILE}")"
+
+  {
+    printf 'aws_region = '
+    hcl_string "${AWS_REGION_NAME}"
+    printf '\n'
+
+    printf 'name = '
+    hcl_string "${INSTANCE_NAME}"
+    printf '\n'
+
+    printf 'instance_type = '
+    hcl_string "${INSTANCE_TYPE}"
+    printf '\n'
+
+    printf 'key_name = '
+    hcl_string "${KEY_NAME}"
+    printf '\n'
+
+    printf 'ami_ssm_parameter = '
+    hcl_string "${AMI_SSM_PARAMETER}"
+    printf '\n'
+
+    printf 'volume_size_gb = %s\n' "${VOLUME_SIZE_GB}"
+    printf 'associate_public_ip = %s\n' "$(bool_value "${ASSOCIATE_PUBLIC_IP}")"
+
+    write_optional_string_var "vpc_id" "${VPC_ID}"
+    write_optional_string_var "subnet_id" "${SUBNET_ID}"
+    write_optional_string_var "security_group_id" "${SECURITY_GROUP_ID}"
+    write_optional_string_var "ssh_ingress_cidr" "${INGRESS_CIDR}"
+  } > "${TF_VARS_FILE}"
+}
+
+bool_value() {
+  if [[ "$1" == "1" ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+terraform_init() {
+  terraform -chdir="${TF_DIR}" init -input=false
+}
+
+terraform_apply() {
+  terraform -chdir="${TF_DIR}" apply -auto-approve -input=false
+}
+
+terraform_output() {
+  terraform -chdir="${TF_DIR}" output -raw "$1"
+}
+
+load_outputs() {
+  INSTANCE_ID=$(terraform_output instance_id)
+  SSH_HOST=$(terraform_output ssh_host 2>/dev/null || true)
+}
+
+ssh_base_args=()
+
+configure_ssh_args() {
+  mkdir -p "${STATE_DIR}"
+  ssh_base_args=(
+    -i "${KEY_FILE}"
+    -o StrictHostKeyChecking=accept-new
+    -o UserKnownHostsFile="${STATE_DIR}/known_hosts"
+    -o ConnectTimeout=10
+    -o ServerAliveInterval=15
+  )
+}
+
+ssh_remote() {
+  # shellcheck disable=SC2029
+  ssh "${ssh_base_args[@]}" "${SSH_USER}@${SSH_HOST}" "$@"
+}
+
+wait_for_ssh() {
+  local deadline
+
+  [[ -n "${SSH_HOST}" ]] || die "Terraform output did not include an SSH host"
+
+  deadline=$((SECONDS + 600))
+  while ((SECONDS < deadline)); do
+    if ssh_remote 'echo ready' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 10
+  done
+
+  die "timed out waiting for SSH on ${SSH_USER}@${SSH_HOST}"
+}
+
+sync_repo() {
+  ssh_remote "rm -rf ~/${REMOTE_DIR} && mkdir -p ~/${REMOTE_DIR}"
+
+  tar \
+    --exclude='.aws-gpu' \
+    --exclude='.git' \
+    --exclude='.mypy_cache' \
+    --exclude='.pytest_cache' \
+    --exclude='.ruff_cache' \
+    --exclude='.terraform' \
+    --exclude='.venv' \
+    --exclude='*.tfvars' \
+    --exclude='*.tfvars.json' \
+    --exclude='*.tfstate' \
+    --exclude='*.tfstate.*' \
+    --exclude='*.tfplan' \
+    --exclude='tfplan' \
+    --exclude='benchmarks/results' \
+    --exclude='experiments/results' \
+    --exclude='profiling/**/captures' \
+    --exclude='profiling/**/raw' \
+    -czf - \
+    -C "${REPO_ROOT}" . \
+    | ssh_remote "tar -xzf - -C \$HOME/${REMOTE_DIR}"
+}
+
+bootstrap_remote() {
+  ssh_remote "cd ~/${REMOTE_DIR} && \
+    if ! command -v uv >/dev/null 2>&1; then uv_installer=\$(mktemp) && curl -LsSf https://astral.sh/uv/install.sh -o \"\$uv_installer\" && sh \"\$uv_installer\" && rm -f \"\$uv_installer\"; fi && \
+    export PATH=\"\$HOME/.local/bin:\$PATH\" && \
+    uv sync --group dev --extra gpu && \
+    uv run gpu-info && \
+    uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run"
+}
+
+print_ready() {
+  printf '\nReady:\n'
+  printf '  Instance: %s (%s)\n' "${INSTANCE_ID}" "${INSTANCE_TYPE}"
+  printf '  Region: %s\n' "${AWS_REGION_NAME}"
+  printf '  Terraform: %s\n' "${TF_DIR}"
+  printf '  Variables: %s\n' "${TF_VARS_FILE}"
+
+  if [[ -n "${SSH_HOST}" && -n "${KEY_FILE}" ]]; then
+    printf '  SSH: ssh -i %q %s@%s\n' "${KEY_FILE}" "${SSH_USER}" "${SSH_HOST}"
+    printf '  Repo: ~/%s\n' "${REMOTE_DIR}"
+    printf '  Benchmark: cd ~/%s && uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep\n' "${REMOTE_DIR}"
+  elif [[ -n "${SSH_HOST}" ]]; then
+    printf '  SSH host: %s@%s\n' "${SSH_USER}" "${SSH_HOST}"
+    printf '  SSH key: use the private key for EC2 key pair %s\n' "${KEY_NAME}"
+  else
+    printf '  SSH host: no reachable host recorded; check private connectivity for the selected subnet.\n'
+  fi
+
+  printf '  Tear down: ./scripts/down\n'
+}
+
+main() {
+  parse_args "$@"
+  validate_inputs
+  check_prereqs
+  configure_aws_profile
+
+  print_stage "resolving SSH ingress input"
+  resolve_ingress_cidr
+
+  print_stage "writing local Terraform variables"
+  write_tfvars
+
+  print_stage "terraform init"
+  terraform_init
+
+  print_stage "terraform apply"
+  terraform_apply
+
+  load_outputs
+
+  if [[ "${SKIP_BOOTSTRAP}" == "0" ]]; then
+    print_stage "syncing repo and bootstrapping GPU benchmark environment"
+    configure_ssh_args
+    wait_for_ssh
+    sync_repo
+    bootstrap_remote
+  else
+    print_stage "skipping SSH bootstrap"
+  fi
+
+  print_ready
+}
+
+main "$@"

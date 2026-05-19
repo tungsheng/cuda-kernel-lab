@@ -1,56 +1,122 @@
 # Live GPU On AWS EC2
 
 Use AWS EC2 as a disposable single-GPU Linux host for benchmark evidence. This
-repo does not need an EKS cluster or a long-running GPU machine.
+repo does not need an EKS cluster or a long-running GPU machine. Terraform owns
+the benchmark instance, security group, AMI lookup, and local state under
+`infra/env/aws-gpu`.
 
 Defaults:
 
 - region: `us-west-2`
 - instance type: `g5.xlarge`
-- AMI source: AWS Deep Learning OSS NVIDIA Driver GPU PyTorch Ubuntu 22.04,
+- AMI source: AWS Deep Learning Base OSS NVIDIA Driver GPU Ubuntu 22.04,
   resolved from AWS SSM Parameter Store
 
 ## Prerequisites
 
-- AWS CLI with credentials for `us-west-2`
+- Terraform `>= 1.6`
+- AWS credentials for `us-west-2`
 - EC2 GPU quota for `g5.xlarge`
-- an EC2 key pair
-- a subnet that can be reached by SSH
-- a security group that allows SSH from your IP
-- local `uv` installed on the EC2 host after launch
+- an EC2 key pair and matching local private key
+- a default VPC, or an explicit subnet passed with `--subnet-id`
+- local `ssh` and `tar` when using the bootstrap path
 
-## Launch
+## Recommended Scripted Launch
 
-Print the launch commands first:
+Use the repo script when you want the closest equivalent to
+`gpu-inference-lab`'s `scripts/up`, but backed by a small Terraform EC2
+environment instead of an EKS platform:
 
 ```bash
-uv run aws-ec2-live-gpu launch \
+./scripts/up \
   --key-name <key-pair-name> \
+  --key-file <key-file.pem>
+```
+
+By default, the script:
+
+- writes `infra/env/aws-gpu/local.auto.tfvars`
+- runs `terraform -chdir=infra/env/aws-gpu init`
+- runs `terraform -chdir=infra/env/aws-gpu apply -auto-approve`
+- lets Terraform discover the default subnet, create the SSH security group,
+  resolve the AMI from SSM Parameter Store, and launch one `g5.xlarge` instance
+- syncs this working tree to `~/cuda-kernel-lab`
+- installs `uv`, syncs GPU dependencies, runs `gpu-info`, and prints the
+  benchmark matrix dry run
+
+Use a named AWS profile or a different GPU shape explicitly:
+
+```bash
+./scripts/up \
+  --profile <aws-profile> \
+  --instance-type g6.xlarge \
+  --key-name <key-pair-name> \
+  --key-file <key-file.pem>
+```
+
+Use existing network controls when the default VPC path is not appropriate:
+
+```bash
+./scripts/up \
+  --key-name <key-pair-name> \
+  --key-file <key-file.pem> \
   --subnet-id <subnet-id> \
   --security-group-id <security-group-id>
 ```
 
-Add `--profile <aws-profile>` if you use a named AWS profile.
-
-When the commands look correct, run the launch:
-
-```bash
-uv run aws-ec2-live-gpu launch \
-  --key-name <key-pair-name> \
-  --subnet-id <subnet-id> \
-  --security-group-id <security-group-id> \
-  --execute
-```
-
-Record the instance ID and public IP from the AWS output.
-
-## Prepare The Host
-
-SSH to the instance, then install `uv` and clone this repo:
+After launch, SSH to the host and run the benchmark evidence pass:
 
 ```bash
 ssh -i <key-file.pem> ubuntu@<public-ip>
-curl -LsSf https://astral.sh/uv/install.sh | sh
+cd ~/cuda-kernel-lab
+uv run benchmark-matrix --include-vector-add-sweep
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
+```
+
+Terminate the instance and remove the temporary security group:
+
+```bash
+./scripts/down
+```
+
+Run `./scripts/up --help` for all options, including `--skip-bootstrap`,
+`--no-public-ip`, `--ingress-cidr`, and `--tf-vars-file`.
+
+## Direct Terraform
+
+Use Terraform directly when you want to inspect the plan before creating
+anything:
+
+```bash
+terraform -chdir=infra/env/aws-gpu init
+terraform -chdir=infra/env/aws-gpu plan \
+  -out tfplan \
+  -var 'key_name=<key-pair-name>' \
+  -var 'ssh_ingress_cidr=<your-ip>/32'
+terraform -chdir=infra/env/aws-gpu apply tfplan
+```
+
+Common overrides:
+
+```bash
+terraform -chdir=infra/env/aws-gpu plan \
+  -var 'key_name=<key-pair-name>' \
+  -var 'ssh_ingress_cidr=<your-ip>/32' \
+  -var 'instance_type=g6.xlarge' \
+  -var 'subnet_id=<subnet-id>'
+```
+
+## Manual Host Preparation
+
+When you use direct Terraform or `./scripts/up --skip-bootstrap`, SSH to the
+instance, then install `uv` and clone or copy this repo:
+
+```bash
+ssh -i <key-file.pem> ubuntu@<public-ip>
+uv_installer=$(mktemp)
+curl -LsSf https://astral.sh/uv/install.sh -o "$uv_installer"
+sh "$uv_installer"
+rm -f "$uv_installer"
 git clone <repo-url>
 cd cuda-kernel-lab
 uv sync --group dev --extra gpu
@@ -93,16 +159,14 @@ Save compact profiler notes under `profiling/reports/`.
 
 ## Terminate
 
-Print the terminate command first:
-
 ```bash
-uv run aws-ec2-live-gpu terminate --instance-id <instance-id>
+./scripts/down
 ```
 
-Then terminate explicitly:
+Or destroy directly with Terraform:
 
 ```bash
-uv run aws-ec2-live-gpu terminate --instance-id <instance-id> --execute
+terraform -chdir=infra/env/aws-gpu destroy
 ```
 
 Terminate the instance as soon as benchmark evidence is collected.

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/_common.sh"
+
+TF_DIR="${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}"
+TF_VARS_FILE="${CUDA_KERNEL_LAB_TF_VARS_FILE:-${TF_DIR}/local.auto.tfvars}"
+
+REQUESTED_REGION=""
+REQUESTED_PROFILE=""
+KEEP_TFVARS=0
+
+usage() {
+  cat <<EOF
+Usage:
+  ./scripts/down [options]
+
+Uses Terraform to destroy the disposable EC2 GPU benchmark host created by
+./scripts/up.
+
+Options:
+  --profile <name>          AWS CLI profile used by Terraform.
+  --region <name>           AWS region override.
+  --tf-dir <path>           Terraform environment. Default: ${TF_DIR}
+  --tf-vars-file <path>     Local auto tfvars file. Default: ${TF_VARS_FILE}
+  --keep-tfvars             Keep the generated local auto tfvars file.
+
+Examples:
+  ./scripts/down
+  ./scripts/down --profile personal
+EOF
+}
+
+parse_args() {
+  while (($# > 0)); do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --profile)
+        require_value "$1" "${2:-}"
+        REQUESTED_PROFILE=${2:-}
+        shift 2
+        ;;
+      --region)
+        require_value "$1" "${2:-}"
+        REQUESTED_REGION=${2:-}
+        shift 2
+        ;;
+      --tf-dir)
+        require_value "$1" "${2:-}"
+        TF_DIR=$(expand_path "${2:-}")
+        shift 2
+        ;;
+      --tf-vars-file)
+        require_value "$1" "${2:-}"
+        TF_VARS_FILE=$(expand_path "${2:-}")
+        shift 2
+        ;;
+      --keep-tfvars)
+        KEEP_TFVARS=1
+        shift
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
+configure_aws_profile() {
+  if [[ -n "${REQUESTED_PROFILE}" ]]; then
+    export AWS_PROFILE="${REQUESTED_PROFILE}"
+  fi
+}
+
+terraform_init() {
+  terraform -chdir="${TF_DIR}" init -input=false
+}
+
+terraform_destroy() {
+  local -a args
+
+  args=(-auto-approve -input=false)
+  if [[ -n "${REQUESTED_REGION}" ]]; then
+    args+=(-var "aws_region=${REQUESTED_REGION}")
+  fi
+
+  terraform -chdir="${TF_DIR}" destroy "${args[@]}"
+}
+
+remove_local_tfvars() {
+  if [[ "${KEEP_TFVARS}" == "0" && -f "${TF_VARS_FILE}" ]]; then
+    rm -f "${TF_VARS_FILE}"
+  fi
+}
+
+main() {
+  parse_args "$@"
+  require_commands terraform
+  [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
+  configure_aws_profile
+
+  print_stage "terraform init"
+  terraform_init
+
+  print_stage "terraform destroy"
+  terraform_destroy
+
+  print_stage "removing generated Terraform variables"
+  remove_local_tfvars
+
+  printf '\nDown:\n'
+  printf '  Terraform: %s\n' "${TF_DIR}"
+}
+
+main "$@"

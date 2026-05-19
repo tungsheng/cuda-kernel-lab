@@ -58,6 +58,19 @@ uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
 uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
 ```
 
+Spin up a Terraform-managed disposable AWS EC2 GPU host when you do not have
+local CUDA:
+
+```bash
+./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
+```
+
+Tear it down after collecting evidence:
+
+```bash
+./scripts/down
+```
+
 Save benchmark records for later analysis:
 
 ```bash
