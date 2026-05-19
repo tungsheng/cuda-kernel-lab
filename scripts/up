@@ -4,11 +4,70 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
-# shellcheck disable=SC1091
-. "${SCRIPT_DIR}/_common.sh"
 
-TF_DIR="${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}"
-TF_VARS_FILE="${CUDA_KERNEL_LAB_TF_VARS_FILE:-${TF_DIR}/local.auto.tfvars}"
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+print_stage() {
+  printf '==> %s\n' "$1"
+}
+
+require_commands() {
+  local missing=()
+  local command_name
+
+  for command_name in "$@"; do
+    if ! command -v "${command_name}" >/dev/null 2>&1; then
+      missing+=("${command_name}")
+    fi
+  done
+
+  if ((${#missing[@]} > 0)); then
+    die "missing required command(s): ${missing[*]}"
+  fi
+}
+
+require_value() {
+  local option=$1
+  local value=${2:-}
+
+  [[ -n "${value}" && "${value}" != --* ]] || die "${option} requires a value"
+}
+
+expand_path() {
+  local path=$1
+  local home_prefix
+
+  printf -v home_prefix '%b' '\x7e/'
+
+  if [[ "${path:0:2}" == "${home_prefix}" ]]; then
+    printf '%s/%s\n' "${HOME}" "${path#~/}"
+    return
+  fi
+
+  printf '%s\n' "${path}"
+}
+
+absolute_path() {
+  local path
+  path=$(expand_path "$1")
+
+  if [[ "${path}" == /* ]]; then
+    printf '%s\n' "${path}"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "${path}"
+  fi
+}
+
+TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
+TF_VARS_FILE=$(absolute_path "${CUDA_KERNEL_LAB_TF_VARS_FILE:-${TF_DIR}/local.auto.tfvars}")
+if [[ -n "${CUDA_KERNEL_LAB_TF_VARS_FILE:-}" ]]; then
+  TF_VARS_FILE_EXPLICIT=1
+else
+  TF_VARS_FILE_EXPLICIT=0
+fi
 STATE_DIR="${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}"
 
 AWS_REGION_NAME="${AWS_REGION:-us-west-2}"
@@ -26,8 +85,11 @@ SUBNET_ID=""
 VPC_ID=""
 SECURITY_GROUP_ID=""
 INGRESS_CIDR=""
+VPC_CIDR="10.42.0.0/16"
+PUBLIC_SUBNET_CIDR="10.42.1.0/24"
 ASSOCIATE_PUBLIC_IP=1
 SKIP_BOOTSTRAP=0
+DRY_RUN=0
 
 INSTANCE_ID=""
 SSH_HOST=""
@@ -35,34 +97,38 @@ SSH_HOST=""
 usage() {
   cat <<EOF
 Usage:
-  ./scripts/up --key-name <ec2-key-pair> [--key-file <path-to-pem>]
+  ./scripts/up [--key-name <ec2-key-pair> --key-file <path-to-pem>]
 
-Uses Terraform to create one disposable AWS EC2 GPU host for CUDA benchmark
-runs, then optionally syncs this repo and bootstraps the benchmark environment.
+Creates one disposable AWS EC2 GPU host for CUDA benchmark runs, then syncs
+this repo and bootstraps the benchmark environment when --key-file is provided.
 
 Options:
-  --key-name <name>             Required EC2 key pair name.
-  --key-file <path>             SSH private key. Enables repo sync and bootstrap.
+  --key-name <name>             EC2 key pair name. Required for SSH/bootstrap.
+  --key-file <path>             SSH private key. Enables repo sync/bootstrap.
   --profile <name>              AWS CLI profile used by Terraform.
   --region <name>               AWS region. Default: ${AWS_REGION_NAME}
   --instance-type <type>        EC2 GPU instance. Default: ${INSTANCE_TYPE}
   --name <name>                 EC2 Name tag. Default: ${INSTANCE_NAME}
   --volume-size-gb <gb>         Root EBS size. Default: ${VOLUME_SIZE_GB}
   --ami-ssm-parameter <name>    Public SSM parameter for the DLAMI.
-  --vpc-id <id>                 Existing VPC for Terraform-created SSH security group.
-  --subnet-id <id>              Existing subnet. Defaults to a default subnet.
-  --security-group-id <id>      Existing security group. Defaults to Terraform-created SSH group.
-  --ingress-cidr <cidr>         SSH source CIDR for Terraform-created security group.
+  --vpc-id <id>                 Existing VPC. When set without --subnet-id, the first subnet is used.
+  --subnet-id <id>              Existing subnet. Defaults to a disposable public subnet.
+  --security-group-id <id>      Existing security group. Defaults to EC2-module-created SSH group.
+  --ingress-cidr <cidr>         SSH source CIDR for EC2-module-created security group.
+  --vpc-cidr <cidr>             CIDR for the disposable VPC. Default: ${VPC_CIDR}
+  --public-subnet-cidr <cidr>   CIDR for the disposable public subnet. Default: ${PUBLIC_SUBNET_CIDR}
   --ssh-user <name>             SSH user. Default: ${SSH_USER}
   --remote-dir <path>           Remote repo directory under the SSH user's home.
   --no-public-ip                Do not associate a public IPv4 address.
   --skip-bootstrap              Create infra only; do not SSH, sync, or install dependencies.
+  --dry-run                     Write tfvars and print the launch configuration without Terraform.
   --tf-dir <path>               Terraform environment. Default: ${TF_DIR}
-  --tf-vars-file <path>         Local auto tfvars file. Default: ${TF_VARS_FILE}
+  --tf-vars-file <path>         Terraform variable file. Default: ${TF_VARS_FILE}
 
 Examples:
   ./scripts/up --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
-  ./scripts/up --profile personal --instance-type g6.xlarge --key-name kernel-lab
+  ./scripts/up --profile personal --instance-type g6.xlarge --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
+  ./scripts/up --skip-bootstrap
   ./scripts/down
 EOF
 }
@@ -134,6 +200,16 @@ parse_args() {
         INGRESS_CIDR=${2:-}
         shift 2
         ;;
+      --vpc-cidr)
+        require_value "$1" "${2:-}"
+        VPC_CIDR=${2:-}
+        shift 2
+        ;;
+      --public-subnet-cidr)
+        require_value "$1" "${2:-}"
+        PUBLIC_SUBNET_CIDR=${2:-}
+        shift 2
+        ;;
       --ssh-user)
         require_value "$1" "${2:-}"
         SSH_USER=${2:-}
@@ -152,14 +228,22 @@ parse_args() {
         SKIP_BOOTSTRAP=1
         shift
         ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
       --tf-dir)
         require_value "$1" "${2:-}"
-        TF_DIR=$(expand_path "${2:-}")
+        TF_DIR=$(absolute_path "${2:-}")
+        if [[ "${TF_VARS_FILE_EXPLICIT}" == "0" ]]; then
+          TF_VARS_FILE="${TF_DIR}/local.auto.tfvars"
+        fi
         shift 2
         ;;
       --tf-vars-file)
         require_value "$1" "${2:-}"
-        TF_VARS_FILE=$(expand_path "${2:-}")
+        TF_VARS_FILE=$(absolute_path "${2:-}")
+        TF_VARS_FILE_EXPLICIT=1
         shift 2
         ;;
       *)
@@ -170,9 +254,11 @@ parse_args() {
 }
 
 check_prereqs() {
-  require_commands terraform
+  if [[ "${DRY_RUN}" == "0" ]]; then
+    require_commands terraform
+  fi
 
-  if [[ -z "${SECURITY_GROUP_ID}" && -z "${INGRESS_CIDR}" ]]; then
+  if ssh_access_requested && [[ -z "${SECURITY_GROUP_ID}" && -z "${INGRESS_CIDR}" ]]; then
     require_commands curl
   fi
 
@@ -181,8 +267,11 @@ check_prereqs() {
   fi
 }
 
+ssh_access_requested() {
+  [[ -n "${KEY_NAME}" || -n "${KEY_FILE}" ]]
+}
+
 validate_inputs() {
-  [[ -n "${KEY_NAME}" ]] || die "--key-name is required"
   [[ "${VOLUME_SIZE_GB}" =~ ^[0-9]+$ ]] || die "--volume-size-gb must be an integer"
   ((VOLUME_SIZE_GB >= 40)) || die "--volume-size-gb must be at least 40"
   [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
@@ -195,15 +284,13 @@ validate_inputs() {
     die "SSH key file does not exist: ${KEY_FILE}"
   fi
 
+  if [[ -n "${KEY_FILE}" && -z "${KEY_NAME}" ]]; then
+    die "--key-name is required when --key-file is provided"
+  fi
+
   if [[ "${SKIP_BOOTSTRAP}" == "0" && -z "${KEY_FILE}" ]]; then
     printf 'No --key-file was provided; Terraform will create infra without SSH bootstrap.\n'
     SKIP_BOOTSTRAP=1
-  fi
-}
-
-configure_aws_profile() {
-  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
-    export AWS_PROFILE="${AWS_PROFILE_NAME}"
   fi
 }
 
@@ -211,6 +298,10 @@ resolve_ingress_cidr() {
   local public_ip
 
   if [[ -n "${SECURITY_GROUP_ID}" || -n "${INGRESS_CIDR}" ]]; then
+    return
+  fi
+
+  if ! ssh_access_requested; then
     return
   fi
 
@@ -231,6 +322,15 @@ hcl_string() {
   printf '"%s"' "${value}"
 }
 
+write_string_var() {
+  local name=$1
+  local value=$2
+
+  printf '%s = ' "${name}"
+  hcl_string "${value}"
+  printf '\n'
+}
+
 write_optional_string_var() {
   local name=$1
   local value=$2
@@ -242,54 +342,36 @@ write_optional_string_var() {
   fi
 }
 
+write_bool_var() {
+  local name=$1
+  local value=$2
+
+  if [[ "${value}" == "1" ]]; then
+    printf '%s = true\n' "${name}"
+  else
+    printf '%s = false\n' "${name}"
+  fi
+}
+
 write_tfvars() {
   mkdir -p "$(dirname "${TF_VARS_FILE}")"
 
   {
-    printf 'aws_region = '
-    hcl_string "${AWS_REGION_NAME}"
-    printf '\n'
-
-    printf 'name = '
-    hcl_string "${INSTANCE_NAME}"
-    printf '\n'
-
-    printf 'instance_type = '
-    hcl_string "${INSTANCE_TYPE}"
-    printf '\n'
-
-    printf 'key_name = '
-    hcl_string "${KEY_NAME}"
-    printf '\n'
-
-    printf 'ami_ssm_parameter = '
-    hcl_string "${AMI_SSM_PARAMETER}"
-    printf '\n'
-
+    write_string_var "aws_region" "${AWS_REGION_NAME}"
+    write_string_var "name" "${INSTANCE_NAME}"
+    write_string_var "instance_type" "${INSTANCE_TYPE}"
+    write_optional_string_var "key_name" "${KEY_NAME}"
+    write_string_var "ami_ssm_parameter" "${AMI_SSM_PARAMETER}"
     printf 'volume_size_gb = %s\n' "${VOLUME_SIZE_GB}"
-    printf 'associate_public_ip = %s\n' "$(bool_value "${ASSOCIATE_PUBLIC_IP}")"
+    write_bool_var "associate_public_ip" "${ASSOCIATE_PUBLIC_IP}"
 
     write_optional_string_var "vpc_id" "${VPC_ID}"
     write_optional_string_var "subnet_id" "${SUBNET_ID}"
     write_optional_string_var "security_group_id" "${SECURITY_GROUP_ID}"
     write_optional_string_var "ssh_ingress_cidr" "${INGRESS_CIDR}"
+    write_string_var "vpc_cidr" "${VPC_CIDR}"
+    write_string_var "public_subnet_cidr" "${PUBLIC_SUBNET_CIDR}"
   } > "${TF_VARS_FILE}"
-}
-
-bool_value() {
-  if [[ "$1" == "1" ]]; then
-    printf 'true'
-  else
-    printf 'false'
-  fi
-}
-
-terraform_init() {
-  terraform -chdir="${TF_DIR}" init -input=false
-}
-
-terraform_apply() {
-  terraform -chdir="${TF_DIR}" apply -auto-approve -input=false
 }
 
 terraform_output() {
@@ -370,6 +452,66 @@ bootstrap_remote() {
     uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run"
 }
 
+network_label() {
+  if [[ -n "${SUBNET_ID}" ]]; then
+    printf 'existing subnet %s' "${SUBNET_ID}"
+  elif [[ -n "${VPC_ID}" ]]; then
+    printf 'first subnet in existing VPC %s' "${VPC_ID}"
+  else
+    printf 'disposable VPC %s, public subnet %s' "${VPC_CIDR}" "${PUBLIC_SUBNET_CIDR}"
+  fi
+}
+
+bootstrap_label() {
+  if [[ "${SKIP_BOOTSTRAP}" == "1" ]]; then
+    printf 'disabled'
+  else
+    printf 'enabled'
+  fi
+}
+
+print_teardown_command() {
+  local -a down_cmd
+  down_cmd=("./scripts/down")
+
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    down_cmd+=(--profile "${AWS_PROFILE_NAME}")
+  fi
+  if [[ "${TF_DIR}" != "${REPO_ROOT}/infra/env/aws-gpu" ]]; then
+    down_cmd+=(--tf-dir "${TF_DIR}")
+  fi
+  if [[ "${TF_VARS_FILE_EXPLICIT}" == "1" ]]; then
+    down_cmd+=(--tf-vars-file "${TF_VARS_FILE}")
+  fi
+
+  printf '  Tear down:'
+  printf ' %q' "${down_cmd[@]}"
+  printf '\n'
+}
+
+print_launch_summary() {
+  printf '\nLaunch configuration:\n'
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    printf '  Mode: dry run; no Terraform commands will run\n'
+  fi
+  printf '  Region: %s\n' "${AWS_REGION_NAME}"
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    printf '  AWS profile: %s\n' "${AWS_PROFILE_NAME}"
+  fi
+  printf '  Instance: %s (%s GiB root volume)\n' "${INSTANCE_TYPE}" "${VOLUME_SIZE_GB}"
+  printf '  Network: %s\n' "$(network_label)"
+  if [[ -n "${SECURITY_GROUP_ID}" ]]; then
+    printf '  Security group: %s\n' "${SECURITY_GROUP_ID}"
+  elif ssh_access_requested; then
+    printf '  SSH ingress: %s\n' "${INGRESS_CIDR}"
+  else
+    printf '  SSH ingress: closed by default; no EC2 key pair requested\n'
+  fi
+  printf '  Bootstrap: %s\n' "$(bootstrap_label)"
+  printf '  Terraform: %s\n' "${TF_DIR}"
+  printf '  Variables: %s\n' "${TF_VARS_FILE}"
+}
+
 print_ready() {
   printf '\nReady:\n'
   printf '  Instance: %s (%s)\n' "${INSTANCE_ID}" "${INSTANCE_TYPE}"
@@ -381,33 +523,48 @@ print_ready() {
     printf '  SSH: ssh -i %q %s@%s\n' "${KEY_FILE}" "${SSH_USER}" "${SSH_HOST}"
     printf '  Repo: ~/%s\n' "${REMOTE_DIR}"
     printf '  Benchmark: cd ~/%s && uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep\n' "${REMOTE_DIR}"
-  elif [[ -n "${SSH_HOST}" ]]; then
+  elif [[ -n "${SSH_HOST}" && -n "${KEY_NAME}" ]]; then
     printf '  SSH host: %s@%s\n' "${SSH_USER}" "${SSH_HOST}"
     printf '  SSH key: use the private key for EC2 key pair %s\n' "${KEY_NAME}"
+  elif [[ -n "${SSH_HOST}" ]]; then
+    printf '  SSH access: disabled; relaunch with --key-name and --key-file to bootstrap over SSH.\n'
   else
     printf '  SSH host: no reachable host recorded; check private connectivity for the selected subnet.\n'
   fi
 
-  printf '  Tear down: ./scripts/down\n'
+  print_teardown_command
 }
 
 main() {
   parse_args "$@"
   validate_inputs
   check_prereqs
-  configure_aws_profile
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    export AWS_PROFILE="${AWS_PROFILE_NAME}"
+  fi
 
   print_stage "resolving SSH ingress input"
   resolve_ingress_cidr
 
   print_stage "writing local Terraform variables"
   write_tfvars
+  print_launch_summary
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    print_stage "dry run complete"
+    return 0
+  fi
 
   print_stage "terraform init"
-  terraform_init
+  terraform -chdir="${TF_DIR}" init -input=false
 
   print_stage "terraform apply"
-  terraform_apply
+  local -a apply_args
+  apply_args=(-auto-approve -input=false)
+  if [[ "${TF_VARS_FILE_EXPLICIT}" == "1" ]]; then
+    apply_args+=("-var-file=${TF_VARS_FILE}")
+  fi
+  terraform -chdir="${TF_DIR}" apply "${apply_args[@]}"
 
   load_outputs
 

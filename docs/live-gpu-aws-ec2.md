@@ -17,8 +17,7 @@ Defaults:
 - Terraform `>= 1.6`
 - AWS credentials for `us-west-2`
 - EC2 GPU quota for `g5.xlarge`
-- an EC2 key pair and matching local private key
-- a default VPC, or an explicit subnet passed with `--subnet-id`
+- an EC2 key pair and matching local private key when using SSH/bootstrap
 - local `ssh` and `tar` when using the bootstrap path
 
 ## Recommended Scripted Launch
@@ -33,16 +32,34 @@ environment instead of an EKS platform:
   --key-file <key-file.pem>
 ```
 
-By default, the script:
+With a key pair and key file, the script:
 
 - writes `infra/env/aws-gpu/local.auto.tfvars`
 - runs `terraform -chdir=infra/env/aws-gpu init`
 - runs `terraform -chdir=infra/env/aws-gpu apply -auto-approve`
-- lets Terraform discover the default subnet, create the SSH security group,
-  resolve the AMI from SSM Parameter Store, and launch one `g5.xlarge` instance
+- uses the published VPC and EC2 Terraform modules to create a disposable
+  public subnet, optional SSH security group, and one `g5.xlarge` instance
+- resolves the GPU AMI from AWS SSM Parameter Store
 - syncs this working tree to `~/cuda-kernel-lab`
 - installs `uv`, syncs GPU dependencies, runs `gpu-info`, and prints the
   benchmark matrix dry run
+
+Like `gpu-inference-lab`'s Karpenter GPU nodes, an infra-only launch can omit
+EC2 SSH keys:
+
+```bash
+./scripts/up --skip-bootstrap
+```
+
+That path creates the host without a key pair and leaves SSH closed by default.
+
+Check the generated Terraform inputs without touching AWS:
+
+```bash
+./scripts/up \
+  --skip-bootstrap \
+  --dry-run
+```
 
 Use a named AWS profile or a different GPU shape explicitly:
 
@@ -54,7 +71,7 @@ Use a named AWS profile or a different GPU shape explicitly:
   --key-file <key-file.pem>
 ```
 
-Use existing network controls when the default VPC path is not appropriate:
+Use existing network controls when the disposable VPC path is not appropriate:
 
 ```bash
 ./scripts/up \
@@ -76,19 +93,25 @@ uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 Add `--include-matmul` when collecting the first tiled matmul progression in
 the same session.
 
-Terminate the instance and remove the temporary security group:
+Terminate the instance and remove the temporary network/security resources:
 
 ```bash
 ./scripts/down
 ```
 
+`./scripts/up` prints a matching `./scripts/down` command when you use a named
+profile, custom Terraform directory, or explicit tfvars file. By default,
+`./scripts/down` removes the generated default tfvars file after destroy and
+keeps explicit tfvars paths unless you pass `--remove-tfvars`.
+
 Run `./scripts/up --help` for all options, including `--skip-bootstrap`,
-`--no-public-ip`, `--ingress-cidr`, and `--tf-vars-file`.
+`--no-public-ip`, `--ingress-cidr`, `--dry-run`, and `--tf-vars-file`.
 
 ## Direct Terraform
 
 Use Terraform directly when you want to inspect the plan before creating
-anything:
+anything. `key_name` and `ssh_ingress_cidr` are needed only when you want SSH
+access:
 
 ```bash
 terraform -chdir=infra/env/aws-gpu init
@@ -111,8 +134,8 @@ terraform -chdir=infra/env/aws-gpu plan \
 
 ## Manual Host Preparation
 
-When you use direct Terraform or `./scripts/up --skip-bootstrap`, SSH to the
-instance, then install `uv` and clone or copy this repo:
+When you use direct Terraform or `./scripts/up --skip-bootstrap` with an EC2 key
+pair, SSH to the instance, then install `uv` and clone or copy this repo:
 
 ```bash
 ssh -i <key-file.pem> ubuntu@<public-ip>

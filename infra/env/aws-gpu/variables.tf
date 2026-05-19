@@ -5,7 +5,7 @@ variable "aws_region" {
 }
 
 variable "name" {
-  description = "Name tag for the benchmark instance and Terraform-managed security group."
+  description = "Name tag for the benchmark instance, VPC, and EC2-module-managed security group."
   type        = string
   default     = "cuda-kernel-lab-gpu"
 }
@@ -17,7 +17,7 @@ variable "instance_type" {
 }
 
 variable "key_name" {
-  description = "EC2 key pair name used for SSH access."
+  description = "Optional EC2 key pair name used for SSH access."
   type        = string
   default     = null
 }
@@ -46,25 +46,37 @@ variable "associate_public_ip" {
 }
 
 variable "vpc_id" {
-  description = "Existing VPC ID. Defaults to the selected subnet VPC or the default VPC."
+  description = "Existing VPC ID. When omitted with subnet_id, Terraform creates a disposable VPC."
   type        = string
   default     = null
 }
 
 variable "subnet_id" {
-  description = "Existing subnet ID. Defaults to the first default subnet in the selected/default VPC."
+  description = "Existing subnet ID. Defaults to the disposable VPC public subnet, or the first subnet in vpc_id when provided."
   type        = string
   default     = null
 }
 
+variable "vpc_cidr" {
+  description = "CIDR block for the disposable VPC created when vpc_id and subnet_id are omitted."
+  type        = string
+  default     = "10.42.0.0/16"
+}
+
+variable "public_subnet_cidr" {
+  description = "CIDR block for the disposable public subnet created by the VPC module."
+  type        = string
+  default     = "10.42.1.0/24"
+}
+
 variable "security_group_id" {
-  description = "Existing security group ID. When omitted, Terraform creates a temporary SSH security group."
+  description = "Existing security group ID. When omitted, the EC2 module creates a temporary SSH security group."
   type        = string
   default     = null
 }
 
 variable "ssh_ingress_cidr" {
-  description = "CIDR allowed to reach SSH when Terraform creates the security group."
+  description = "CIDR allowed to reach SSH when the EC2 module creates the security group."
   type        = string
   default     = null
 

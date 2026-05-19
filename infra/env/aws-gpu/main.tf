@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = ">= 6.37, < 7.0"
     }
   }
 }
@@ -17,10 +17,10 @@ data "aws_ssm_parameter" "gpu_ami" {
   name = var.ami_ssm_parameter
 }
 
-data "aws_vpc" "default" {
-  count = var.vpc_id == null && var.subnet_id == null ? 1 : 0
+data "aws_availability_zones" "available" {
+  count = local.create_vpc ? 1 : 0
 
-  default = true
+  state = "available"
 }
 
 data "aws_subnet" "selected" {
@@ -29,26 +29,17 @@ data "aws_subnet" "selected" {
   id = var.subnet_id
 }
 
-data "aws_subnets" "default" {
-  count = var.subnet_id == null ? 1 : 0
+data "aws_subnets" "selected" {
+  count = !local.create_vpc && var.subnet_id == null ? 1 : 0
 
   filter {
     name   = "vpc-id"
-    values = [local.vpc_id]
-  }
-
-  filter {
-    name   = "default-for-az"
-    values = ["true"]
+    values = [var.vpc_id]
   }
 }
 
 locals {
-  vpc_id = var.vpc_id != null ? var.vpc_id : (
-    var.subnet_id != null ? data.aws_subnet.selected[0].vpc_id : data.aws_vpc.default[0].id
-  )
-
-  subnet_id = var.subnet_id != null ? var.subnet_id : sort(data.aws_subnets.default[0].ids)[0]
+  create_vpc = var.vpc_id == null && var.subnet_id == null
 
   common_tags = merge(
     var.tags,
@@ -58,94 +49,124 @@ locals {
     }
   )
 
-  security_group_id = var.security_group_id != null ? var.security_group_id : aws_security_group.ssh[0].id
+  vpc_id = (
+    local.create_vpc
+    ? module.vpc.vpc_id
+    : (
+      var.subnet_id != null
+      ? data.aws_subnet.selected[0].vpc_id
+      : var.vpc_id
+    )
+  )
+
+  subnet_id = (
+    local.create_vpc
+    ? module.vpc.public_subnets[0]
+    : (
+      var.subnet_id != null
+      ? var.subnet_id
+      : sort(data.aws_subnets.selected[0].ids)[0]
+    )
+  )
+
+  security_group_id  = var.security_group_id != null ? var.security_group_id : module.gpu_instance.security_group_id
+  security_group_ids = var.security_group_id != null ? [var.security_group_id] : []
 }
 
-resource "aws_security_group" "ssh" {
-  count = var.security_group_id == null ? 1 : 0
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "6.6.1"
 
-  name_prefix = "${var.name}-ssh-"
-  description = "SSH access for disposable cuda-kernel-lab GPU benchmark host"
-  vpc_id      = local.vpc_id
+  create_vpc = local.create_vpc
+  name       = var.name
+  cidr       = var.vpc_cidr
 
-  ingress {
-    description = "benchmark SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [coalesce(var.ssh_ingress_cidr, "127.0.0.1/32")]
-  }
+  azs                     = local.create_vpc ? [data.aws_availability_zones.available[0].names[0]] : []
+  public_subnets          = local.create_vpc ? [var.public_subnet_cidr] : []
+  enable_nat_gateway      = false
+  map_public_ip_on_launch = var.associate_public_ip
 
-  egress {
-    description      = "HTTPS outbound"
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  egress {
-    description      = "HTTP outbound"
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  egress {
-    description      = "DNS UDP outbound"
-    from_port        = 53
-    to_port          = 53
-    protocol         = "udp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  egress {
-    description      = "DNS TCP outbound"
-    from_port        = 53
-    to_port          = 53
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  tags = merge(local.common_tags, {
-    Name = "${var.name}-ssh"
-  })
-
-  lifecycle {
-    create_before_destroy = true
-  }
+  tags = local.common_tags
 }
 
-resource "aws_instance" "gpu" {
+module "gpu_instance" {
+  source  = "terraform-aws-modules/ec2-instance/aws"
+  version = "6.4.0"
+
+  name = var.name
+
   ami                         = data.aws_ssm_parameter.gpu_ami.value
   instance_type               = var.instance_type
   key_name                    = var.key_name
   subnet_id                   = local.subnet_id
-  vpc_security_group_ids      = [local.security_group_id]
+  vpc_security_group_ids      = local.security_group_ids
   associate_public_ip_address = var.associate_public_ip
+  create_security_group       = var.security_group_id == null
+  security_group_name         = "${var.name}-ssh"
+  security_group_description  = "SSH access for disposable cuda-kernel-lab GPU benchmark host"
+  security_group_vpc_id       = local.vpc_id
+  security_group_tags = merge(local.common_tags, {
+    Name = "${var.name}-ssh"
+  })
 
-  root_block_device {
-    volume_size           = var.volume_size_gb
-    volume_type           = "gp3"
-    encrypted             = true
-    delete_on_termination = true
-
-    tags = merge(local.common_tags, {
-      Name = var.name
-    })
+  security_group_ingress_rules = {
+    ssh = {
+      description = "benchmark SSH"
+      cidr_ipv4   = coalesce(var.ssh_ingress_cidr, "127.0.0.1/32")
+      from_port   = 22
+      ip_protocol = "tcp"
+      to_port     = 22
+    }
   }
 
-  metadata_options {
+  security_group_egress_rules = {
+    http_ipv4 = {
+      cidr_ipv4   = "0.0.0.0/0"
+      description = "HTTP outbound"
+      from_port   = 80
+      ip_protocol = "tcp"
+      to_port     = 80
+    }
+    https_ipv4 = {
+      cidr_ipv4   = "0.0.0.0/0"
+      description = "HTTPS outbound"
+      from_port   = 443
+      ip_protocol = "tcp"
+      to_port     = 443
+    }
+    dns_tcp_ipv4 = {
+      cidr_ipv4   = "0.0.0.0/0"
+      description = "DNS TCP outbound"
+      from_port   = 53
+      ip_protocol = "tcp"
+      to_port     = 53
+    }
+    dns_udp_ipv4 = {
+      cidr_ipv4   = "0.0.0.0/0"
+      description = "DNS UDP outbound"
+      from_port   = 53
+      ip_protocol = "udp"
+      to_port     = 53
+    }
+  }
+
+  root_block_device = {
+    delete_on_termination = true
+    encrypted             = true
+    size                  = var.volume_size_gb
+    type                  = "gp3"
+  }
+
+  metadata_options = {
     http_endpoint = "enabled"
     http_tokens   = "required"
   }
 
   tags = merge(local.common_tags, {
+    Name = var.name
+  })
+
+  volume_tags = merge(local.common_tags, {
     Name = var.name
   })
 }

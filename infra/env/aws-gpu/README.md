@@ -10,6 +10,10 @@ Use the wrapper scripts for the common path:
 ./scripts/down
 ```
 
+Like the GPU nodes in `gpu-inference-lab`, this environment can launch without
+an EC2 SSH key. Omit `--key-name` and `--key-file` for an infra-only host; pass
+both only when you want SSH bootstrap.
+
 Use Terraform directly when you want to inspect or customize the plan:
 
 ```bash
@@ -28,7 +32,10 @@ Defaults:
 - AMI source: AWS Deep Learning Base OSS NVIDIA Driver GPU Ubuntu 22.04 SSM
   parameter
 - root volume: 100 GiB gp3, deleted on termination
-- networking: default VPC/default subnet unless `vpc_id` or `subnet_id` is set
+- networking: disposable VPC module with one public subnet unless `vpc_id` or
+  `subnet_id` is set
+- modules: `terraform-aws-modules/vpc/aws` and
+  `terraform-aws-modules/ec2-instance/aws`
 
-Terraform creates an SSH security group when `security_group_id` is omitted.
-Set `ssh_ingress_cidr` to your public IP CIDR for that path.
+The EC2 module creates an SSH security group when `security_group_id` is
+omitted. Set `ssh_ingress_cidr` to your public IP CIDR for that path.
