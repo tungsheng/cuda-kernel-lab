@@ -30,8 +30,8 @@ trustworthy reference numbers.
 uv sync --group dev --extra gpu
 uv run gpu-info
 uv run pytest
-uv run benchmark-matrix --dry-run
-uv run benchmark-matrix
+uv run benchmark-matrix --include-vector-add-sweep --dry-run
+uv run benchmark-matrix --include-vector-add-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
@@ -40,6 +40,9 @@ uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 - `experiments/results/aws-ec2-first-run/memory.jsonl`
 - `experiments/results/aws-ec2-first-run/softmax.jsonl`
 - `experiments/results/aws-ec2-first-run/norms.jsonl`
+- `experiments/results/aws-ec2-first-run/vector-add-block-size.jsonl`
+
+`benchmark-report` includes every `.jsonl` file in this run directory.
 
 ## Results
 

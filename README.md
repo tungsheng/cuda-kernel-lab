@@ -37,6 +37,13 @@ Print the first live-GPU benchmark matrix:
 uv run benchmark-matrix --dry-run
 ```
 
+Include the first `vector_add` block-size sweep when collecting strategy
+evidence:
+
+```bash
+uv run benchmark-matrix --include-vector-add-sweep --dry-run
+```
+
 Generate a report after a live GPU matrix run:
 
 ```bash

@@ -12,7 +12,6 @@ from typing import Any
 
 DEFAULT_INPUT_DIR = Path("experiments/results/aws-ec2-first-run")
 DEFAULT_OUTPUT = Path("experiments/aws-ec2-first-gpu-run.md")
-RESULT_FILES = ("memory.jsonl", "softmax.jsonl", "norms.jsonl")
 NOISE_RATIO_THRESHOLD = 1.20
 
 
@@ -23,6 +22,7 @@ class ReportRow:
     backend: str
     dtype: str
     shape: tuple[int, ...]
+    variant: str
     p50_ms: float
     p95_ms: float
     p99_ms: float
@@ -35,13 +35,10 @@ class ReportRow:
 
 
 def load_report_rows(input_dir: Path) -> list[ReportRow]:
-    """Load all benchmark rows from the standard first-run JSONL files."""
+    """Load all benchmark rows from JSONL files in a benchmark run directory."""
 
     rows: list[ReportRow] = []
-    for filename in RESULT_FILES:
-        path = input_dir / filename
-        if not path.exists():
-            continue
+    for path in _jsonl_paths(input_dir):
         with path.open(encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
                 stripped = line.strip()
@@ -101,15 +98,16 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "",
             "## Fastest By Operation",
             "",
-            "| Primitive | Operation | Dtype | Shape | Fastest Backend | p50 ms | GB/s | TFLOP/s |",
-            "| --- | --- | --- | --- | --- | ---: | ---: | ---: |",
+            "| Primitive | Operation | Dtype | Shape | Variant | Fastest Backend | "
+            "p50 ms | GB/s | TFLOP/s |",
+            "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |",
         ]
     )
     for row in _fastest_rows(rows):
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
-            f"{row.backend} | {_fmt(row.p50_ms)} | {_fmt(row.bandwidth_gbps)} | "
+            f"{row.variant} | {row.backend} | {_fmt(row.p50_ms)} | {_fmt(row.bandwidth_gbps)} | "
             f"{_fmt(row.tflops)} |"
         )
 
@@ -118,16 +116,17 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "",
             "## Backend Detail",
             "",
-            "| Primitive | Operation | Dtype | Shape | Backend | p50 ms | p95 ms | p99 ms | "
-            "GB/s | TFLOP/s | Speedup vs Torch | Noise |",
-            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| Primitive | Operation | Dtype | Shape | Variant | Backend | p50 ms | "
+            "p95 ms | p99 ms | GB/s | TFLOP/s | Speedup vs Torch | Noise |",
+            "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
     for row in sorted(rows, key=_sort_key):
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
-            f"{row.backend} | {_fmt(row.p50_ms)} | {_fmt(row.p95_ms)} | {_fmt(row.p99_ms)} | "
+            f"{row.variant} | {row.backend} | {_fmt(row.p50_ms)} | {_fmt(row.p95_ms)} | "
+            f"{_fmt(row.p99_ms)} | "
             f"{_fmt(row.bandwidth_gbps)} | {_fmt(row.tflops)} | "
             f"{_fmt_optional(row.speedup_vs_torch)} | "
             f"{_noise_label(row.noise_ratio)} |"
@@ -188,6 +187,7 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
         backend=backend,
         dtype=str(result["dtype"]),
         shape=tuple(int(dim) for dim in result["shape"]),
+        variant=_variant_label(run),
         p50_ms=float(result["p50_ms"]),
         p95_ms=float(result["p95_ms"]),
         p99_ms=float(result["p99_ms"]),
@@ -200,15 +200,19 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
     )
 
 
+def _jsonl_paths(input_dir: Path) -> list[Path]:
+    return sorted(path for path in input_dir.glob("*.jsonl") if path.is_file())
+
+
 def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
     torch_p50 = {
-        (row.primitive, row.operation, row.dtype, row.shape): row.p50_ms
+        (row.primitive, row.operation, row.dtype, row.shape, row.variant): row.p50_ms
         for row in rows
         if row.backend == "torch"
     }
     enriched = []
     for row in rows:
-        baseline = torch_p50.get((row.primitive, row.operation, row.dtype, row.shape))
+        baseline = torch_p50.get((row.primitive, row.operation, row.dtype, row.shape, row.variant))
         speedup = _ratio(baseline, row.p50_ms) if baseline is not None else None
         enriched.append(
             ReportRow(
@@ -217,6 +221,7 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
                 backend=row.backend,
                 dtype=row.dtype,
                 shape=row.shape,
+                variant=row.variant,
                 p50_ms=row.p50_ms,
                 p95_ms=row.p95_ms,
                 p99_ms=row.p99_ms,
@@ -232,9 +237,9 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
 
 
 def _fastest_rows(rows: list[ReportRow]) -> list[ReportRow]:
-    fastest: dict[tuple[str, str, str, tuple[int, ...]], ReportRow] = {}
+    fastest: dict[tuple[str, str, str, tuple[int, ...], str], ReportRow] = {}
     for row in rows:
-        key = (row.primitive, row.operation, row.dtype, row.shape)
+        key = (row.primitive, row.operation, row.dtype, row.shape, row.variant)
         current = fastest.get(key)
         if current is None or row.p50_ms < current.p50_ms:
             fastest[key] = row
@@ -245,6 +250,24 @@ def _primitive_label(benchmark: str) -> str:
     if benchmark == "memory_bandwidth":
         return "memory"
     return benchmark
+
+
+def _variant_label(run: dict[str, Any]) -> str:
+    args = run.get("args")
+    if not isinstance(args, dict):
+        return "default"
+
+    strategy_fields = {
+        "memory_bandwidth": ("block_size",),
+        "softmax": ("traffic_model",),
+        "norms": ("eps",),
+    }
+    fields = []
+    for key in strategy_fields.get(str(run.get("benchmark")), ()):
+        value = args.get(key)
+        if value is not None:
+            fields.append(f"{key}={value}")
+    return ", ".join(fields) if fields else "default"
 
 
 def _ratio(numerator: float, denominator: float) -> float | None:
@@ -299,8 +322,8 @@ def _cuda_devices_label(devices: Any) -> str:
     return ", ".join(labels)
 
 
-def _sort_key(row: ReportRow) -> tuple[str, str, str, tuple[int, ...], str]:
-    return (row.primitive, row.operation, row.dtype, row.shape, row.backend)
+def _sort_key(row: ReportRow) -> tuple[str, str, str, tuple[int, ...], str, str]:
+    return (row.primitive, row.operation, row.dtype, row.shape, row.variant, row.backend)
 
 
 if __name__ == "__main__":

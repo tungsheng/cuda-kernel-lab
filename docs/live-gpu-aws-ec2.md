@@ -61,13 +61,13 @@ Confirm the host is ready:
 ```bash
 uv run gpu-info
 uv run pytest
-uv run benchmark-matrix --dry-run
+uv run benchmark-matrix --include-vector-add-sweep --dry-run
 ```
 
-## Run The First Matrix
+## Run The First Evidence Matrix
 
 ```bash
-uv run benchmark-matrix
+uv run benchmark-matrix --include-vector-add-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
@@ -85,8 +85,8 @@ locally. Commit compact summaries, not large raw result dumps.
 Start with one memory primitive and one fused kernel:
 
 ```bash
-ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --output experiments/results/aws-ec2-first-run/memory-profiled.jsonl
-ncu --set full --target-processes all uv run benchmark-softmax --backend triton --device cuda --rows 4096 --cols 1024 --dtype float32 --output experiments/results/aws-ec2-first-run/softmax-profiled.jsonl
+ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/memory-profiled.jsonl
+ncu --set full --target-processes all uv run benchmark-softmax --backend triton --device cuda --rows 4096 --cols 1024 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/softmax-profiled.jsonl
 ```
 
 Save compact profiler notes under `profiling/reports/`.

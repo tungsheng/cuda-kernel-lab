@@ -20,6 +20,7 @@ def test_load_report_rows_computes_speedups_and_noise(tmp_path: Path) -> None:
                 p95=2.1,
                 p99=2.2,
                 gbps=50.0,
+                args={"block_size": 1024, "warmup": 25, "iterations": 100},
             ),
             _record(
                 benchmark="memory_bandwidth",
@@ -29,6 +30,7 @@ def test_load_report_rows_computes_speedups_and_noise(tmp_path: Path) -> None:
                 p95=1.4,
                 p99=1.5,
                 gbps=100.0,
+                args={"block_size": 1024, "warmup": 25, "iterations": 100},
             ),
         ],
     )
@@ -38,8 +40,32 @@ def test_load_report_rows_computes_speedups_and_noise(tmp_path: Path) -> None:
 
     assert triton.primitive == "memory"
     assert triton.operation == "vector_add"
+    assert triton.variant == "block_size=1024"
     assert triton.speedup_vs_torch == pytest.approx(2.0)
     assert triton.noise_ratio == pytest.approx(1.4)
+
+
+def test_load_report_rows_reads_all_jsonl_files(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "vector-add-block-size.jsonl",
+        [
+            _record(
+                benchmark="memory_bandwidth",
+                name="triton:vector_add",
+                dtype="float32",
+                p50=1.0,
+                p95=1.1,
+                p99=1.2,
+                gbps=100.0,
+                args={"block_size": 2048, "warmup": 25, "iterations": 100},
+            ),
+        ],
+    )
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+
+    assert [row.source.name for row in rows] == ["vector-add-block-size.jsonl"]
+    assert rows[0].variant == "block_size=2048"
 
 
 def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> None:
@@ -77,8 +103,12 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
     assert "Status: generated from benchmark JSONL" in report
     assert "- Git commit: `abc123`" in report
     assert "- CUDA devices: `NVIDIA A10G" in report
-    assert "| softmax | softmax | float16 | 4096x1024 | triton | 1.5 | 50 | 1 |" in report
-    assert "| softmax | softmax | float16 | 4096x1024 | triton | 1.5 | 1.6 | 1.7 |" in report
+    assert (
+        "| softmax | softmax | float16 | 4096x1024 | "
+        "traffic_model=fused | triton | 1.5 | 50 | 1 |"
+    ) in report
+    assert "| softmax | softmax | float16 | 4096x1024 | traffic_model=fused" in report
+    assert "| triton | 1.5 | 1.6 | 1.7 |" in report
     assert "| 2 | 1.067 |" in report
 
 
@@ -140,11 +170,12 @@ def _record(
     gbps: float,
     shape: tuple[int, ...] = (16_777_216,),
     tflops: float = 0.0,
+    args: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "run": {
             "benchmark": benchmark,
-            "args": {},
+            "args": _args_for(benchmark) if args is None else args,
             "command": "uv run benchmark",
             "timestamp_utc": "2026-05-19T00:00:00+00:00",
             "git_commit": "abc123",
@@ -176,3 +207,13 @@ def _record(
             "latencies_ms": [p50, p95, p99],
         },
     }
+
+
+def _args_for(benchmark: str) -> dict[str, object]:
+    if benchmark == "memory_bandwidth":
+        return {"block_size": 1024, "warmup": 25, "iterations": 100}
+    if benchmark == "softmax":
+        return {"traffic_model": "fused", "warmup": 25, "iterations": 100}
+    if benchmark == "norms":
+        return {"eps": None, "warmup": 25, "iterations": 100}
+    return {}

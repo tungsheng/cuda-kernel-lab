@@ -54,6 +54,7 @@ Start with `vector_add` block-size tuning:
 
 1. run the AWS EC2 baseline matrix
 2. generate `experiments/aws-ec2-first-gpu-run.md` with `benchmark-report`
-3. sweep `benchmark-memory --backend triton --op vector_add --block-size`
+3. run `benchmark-matrix --include-vector-add-sweep` to capture the first
+   PyTorch-vs-Triton `vector_add` block-size variants
 4. profile the best candidate with Nsight Compute
 5. compare against the PyTorch and default Triton baseline

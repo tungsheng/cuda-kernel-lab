@@ -46,9 +46,9 @@ uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
 
-## Run The First Matrix
+## Run The Matrix
 
-For the first AWS EC2 evidence run, print the full matrix first:
+For a baseline-only run, print the matrix first:
 
 ```bash
 uv run benchmark-matrix --dry-run
@@ -64,19 +64,29 @@ The default matrix runs memory, softmax, and normalization benchmarks for
 `float32` and `float16`, writing JSONL records under
 `experiments/results/aws-ec2-first-run/`.
 
-Generate the first report from those JSONL records:
+Generate a report from those JSONL records:
 
 ```bash
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
-For the first `vector_add` strategy sweep, vary the Triton block size:
+`benchmark-report` reads every `.jsonl` file in the input directory, so write
+small sweeps into the same run directory when they belong to the same evidence
+note.
+
+For the first AWS EC2 evidence run, collect the baseline matrix and first
+`vector_add` strategy sweep in one disposable GPU session:
 
 ```bash
-uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --block-size 512
-uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --block-size 1024
-uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --block-size 2048
+uv run benchmark-matrix --include-vector-add-sweep --dry-run
+uv run benchmark-matrix --include-vector-add-sweep
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
+
+The baseline matrix already captures the default memory block size, `1024`.
+The sweep appends the additional PyTorch and Triton `vector_add` comparison
+runs, `512` and `2048`, to
+`experiments/results/aws-ec2-first-run/vector-add-block-size.jsonl`.
 
 ## Save Results
 

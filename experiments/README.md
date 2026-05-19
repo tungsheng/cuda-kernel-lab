@@ -9,11 +9,11 @@ Recommended result output:
 uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
 ```
 
-First live-GPU matrix:
+First live-GPU evidence run:
 
 ```bash
-uv run benchmark-matrix --dry-run
-uv run benchmark-matrix
+uv run benchmark-matrix --include-vector-add-sweep --dry-run
+uv run benchmark-matrix --include-vector-add-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
