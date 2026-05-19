@@ -68,6 +68,7 @@ uv run benchmark-matrix --dry-run
 
 ```bash
 uv run benchmark-matrix
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
 This writes JSONL records to:

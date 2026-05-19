@@ -11,6 +11,7 @@ from pathlib import Path
 DEFAULT_OUTPUT_DIR = Path("experiments/results/aws-ec2-first-run")
 DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
+DEFAULT_MEMORY_BLOCK_SIZE = 1024
 DEFAULT_DEVICE = "cuda"
 DTYPES = ("float32", "float16")
 
@@ -33,6 +34,7 @@ def build_matrix(
     device: str = DEFAULT_DEVICE,
     warmup: int = DEFAULT_WARMUP,
     iterations: int = DEFAULT_ITERATIONS,
+    memory_block_size: int = DEFAULT_MEMORY_BLOCK_SIZE,
 ) -> tuple[MatrixCommand, ...]:
     """Build the default live-GPU benchmark command matrix."""
 
@@ -40,6 +42,8 @@ def build_matrix(
         raise ValueError("warmup must be non-negative")
     if iterations <= 0:
         raise ValueError("iterations must be positive")
+    if memory_block_size <= 0:
+        raise ValueError("memory_block_size must be positive")
 
     commands: list[MatrixCommand] = []
     for dtype in DTYPES:
@@ -61,6 +65,8 @@ def build_matrix(
                     "16777216",
                     "--dtype",
                     dtype,
+                    "--block-size",
+                    str(memory_block_size),
                     "--warmup",
                     str(warmup),
                     "--iterations",
@@ -150,6 +156,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
     parser.add_argument("--iterations", type=int, default=DEFAULT_ITERATIONS)
+    parser.add_argument(
+        "--memory-block-size",
+        type=int,
+        default=DEFAULT_MEMORY_BLOCK_SIZE,
+        help="Triton block size passed to benchmark-memory commands.",
+    )
     return parser.parse_args(argv)
 
 
@@ -160,6 +172,7 @@ def main(argv: list[str] | None = None) -> None:
         device=args.device,
         warmup=args.warmup,
         iterations=args.iterations,
+        memory_block_size=args.memory_block_size,
     )
 
     if args.dry_run:

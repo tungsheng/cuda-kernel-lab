@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from cuda_kernel_lab import benchmark_report
+
+
+def test_load_report_rows_computes_speedups_and_noise(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "memory.jsonl",
+        [
+            _record(
+                benchmark="memory_bandwidth",
+                name="torch:vector_add",
+                dtype="float32",
+                p50=2.0,
+                p95=2.1,
+                p99=2.2,
+                gbps=50.0,
+            ),
+            _record(
+                benchmark="memory_bandwidth",
+                name="triton:vector_add",
+                dtype="float32",
+                p50=1.0,
+                p95=1.4,
+                p99=1.5,
+                gbps=100.0,
+            ),
+        ],
+    )
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+    triton = next(row for row in rows if row.backend == "triton")
+
+    assert triton.primitive == "memory"
+    assert triton.operation == "vector_add"
+    assert triton.speedup_vs_torch == pytest.approx(2.0)
+    assert triton.noise_ratio == pytest.approx(1.4)
+
+
+def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "softmax.jsonl",
+        [
+            _record(
+                benchmark="softmax",
+                name="torch:softmax",
+                dtype="float16",
+                shape=(4096, 1024),
+                p50=3.0,
+                p95=3.1,
+                p99=3.2,
+                gbps=25.0,
+                tflops=0.5,
+            ),
+            _record(
+                benchmark="softmax",
+                name="triton:softmax",
+                dtype="float16",
+                shape=(4096, 1024),
+                p50=1.5,
+                p95=1.6,
+                p99=1.7,
+                gbps=50.0,
+                tflops=1.0,
+            ),
+        ],
+    )
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+    report = benchmark_report.render_markdown(rows, input_dir=tmp_path)
+
+    assert "Status: generated from benchmark JSONL" in report
+    assert "- Git commit: `abc123`" in report
+    assert "- CUDA devices: `NVIDIA A10G" in report
+    assert "| softmax | softmax | float16 | 4096x1024 | triton | 1.5 | 50 | 1 |" in report
+    assert "| softmax | softmax | float16 | 4096x1024 | triton | 1.5 | 1.6 | 1.7 |" in report
+    assert "| 2 | 1.067 |" in report
+
+
+def test_render_markdown_rejects_empty_input(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="no benchmark JSONL records"):
+        benchmark_report.render_markdown([], input_dir=tmp_path)
+
+
+def test_report_dry_run_prints_without_writing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output_path = tmp_path / "report.md"
+    _write_jsonl(
+        tmp_path / "norms.jsonl",
+        [
+            _record(
+                benchmark="norms",
+                name="torch:rmsnorm",
+                dtype="float32",
+                shape=(4096, 4096),
+                p50=4.0,
+                p95=4.2,
+                p99=4.3,
+                gbps=75.0,
+            )
+        ],
+    )
+
+    benchmark_report.main(
+        [
+            "--input-dir",
+            str(tmp_path),
+            "--output",
+            str(output_path),
+            "--dry-run",
+        ]
+    )
+
+    assert "# AWS EC2 First GPU Run" in capsys.readouterr().out
+    assert not output_path.exists()
+
+
+def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record))
+            handle.write("\n")
+
+
+def _record(
+    *,
+    benchmark: str,
+    name: str,
+    dtype: str,
+    p50: float,
+    p95: float,
+    p99: float,
+    gbps: float,
+    shape: tuple[int, ...] = (16_777_216,),
+    tflops: float = 0.0,
+) -> dict[str, object]:
+    return {
+        "run": {
+            "benchmark": benchmark,
+            "args": {},
+            "command": "uv run benchmark",
+            "timestamp_utc": "2026-05-19T00:00:00+00:00",
+            "git_commit": "abc123",
+            "git_dirty": False,
+            "host": {"python": "3.13.2", "platform": "Linux"},
+            "packages": {"torch": "2.3.0", "triton": "2.3.0"},
+            "cuda_devices": [
+                {
+                    "index": 0,
+                    "name": "NVIDIA A10G",
+                    "capability": [8, 6],
+                    "total_memory_bytes": 24_000_000_000,
+                    "multiprocessor_count": 80,
+                }
+            ],
+        },
+        "result": {
+            "name": name,
+            "device": "cuda",
+            "dtype": dtype,
+            "shape": list(shape),
+            "p50_ms": p50,
+            "p95_ms": p95,
+            "p99_ms": p99,
+            "bytes_moved": 1,
+            "bandwidth_gbps": gbps,
+            "flops": 1,
+            "tflops": tflops,
+            "latencies_ms": [p50, p95, p99],
+        },
+    }

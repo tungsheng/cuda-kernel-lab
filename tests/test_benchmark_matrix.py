@@ -22,12 +22,18 @@ def test_default_matrix_covers_expected_primitives_and_dtypes() -> None:
 
 
 def test_matrix_commands_include_shapes_and_output_paths() -> None:
-    entries = benchmark_matrix.build_matrix(output_dir=Path("results"), warmup=7, iterations=11)
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        warmup=7,
+        iterations=11,
+        memory_block_size=2048,
+    )
     command_lines = [entry.shell_line() for entry in entries]
 
     assert (
         "uv run benchmark-memory --backend all --device cuda --op all --numel 16777216 "
-        "--dtype float32 --warmup 7 --iterations 11 --output results/memory.jsonl"
+        "--dtype float32 --block-size 2048 --warmup 7 --iterations 11 "
+        "--output results/memory.jsonl"
     ) in command_lines
     assert (
         "uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024 "
@@ -63,3 +69,6 @@ def test_matrix_rejects_invalid_timing_values() -> None:
 
     with pytest.raises(ValueError, match="iterations"):
         benchmark_matrix.build_matrix(iterations=0)
+
+    with pytest.raises(ValueError, match="memory_block_size"):
+        benchmark_matrix.build_matrix(memory_block_size=0)

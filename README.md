@@ -37,6 +37,12 @@ Print the first live-GPU benchmark matrix:
 uv run benchmark-matrix --dry-run
 ```
 
+Generate a report after a live GPU matrix run:
+
+```bash
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
+```
+
 On a CUDA host, collect GPU numbers explicitly:
 
 ```bash

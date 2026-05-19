@@ -46,6 +46,7 @@ def main() -> None:
                     device=device,
                     warmup=args.warmup,
                     iterations=args.iterations,
+                    block_size=args.block_size,
                 )
             )
 
@@ -61,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--op", choices=("all", *OPS), default="all")
     parser.add_argument("--numel", type=int, default=16_777_216)
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        default=1024,
+        help="Triton block size for memory kernels; ignored by the torch backend.",
+    )
     add_common_benchmark_args(parser)
     return parser.parse_args()
 
@@ -83,14 +90,17 @@ def run_one(
     device: str,
     warmup: int,
     iterations: int,
+    block_size: int,
 ) -> BenchmarkResult:
     if numel <= 0:
         raise ValueError("numel must be positive")
+    if block_size <= 0:
+        raise ValueError("block_size must be positive")
 
     x = torch.randn(numel, device=device, dtype=dtype)
     y = torch.randn(numel, device=device, dtype=dtype)
     out = None if op_name == "reduction_sum" else torch.empty_like(x)
-    fn = build_op(backend, op_name, x, y, out)
+    fn = build_op(backend, op_name, x, y, out, block_size)
     dtype_size = dtype_size_bytes(dtype)
 
     return benchmark_callable(
@@ -112,6 +122,7 @@ def build_op(
     x: Any,
     y: Any,
     out: Any | None,
+    block_size: int,
 ) -> Callable[[], Any]:
     if backend == "torch":
         from cuda_kernel_lab.kernels.torch_baselines import memory
@@ -129,13 +140,13 @@ def build_op(
         from cuda_kernel_lab.kernels.triton import memory
 
         if op_name == "copy":
-            return lambda: memory.copy(x, out=out)
+            return lambda: memory.copy(x, block_size=block_size, out=out)
         if op_name == "scale":
-            return lambda: memory.scale(x, 0.5, out=out)
+            return lambda: memory.scale(x, 0.5, block_size=block_size, out=out)
         if op_name == "vector_add":
-            return lambda: memory.vector_add(x, y, out=out)
+            return lambda: memory.vector_add(x, y, block_size=block_size, out=out)
         if op_name == "reduction_sum":
-            return lambda: memory.reduction_sum(x)
+            return lambda: memory.reduction_sum(x, block_size=block_size)
 
     raise ValueError(f"unknown backend/op combination: {backend}:{op_name}")
 

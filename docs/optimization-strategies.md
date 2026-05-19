@@ -47,3 +47,13 @@ Write comparisons in this order:
 6. next strategy to try
 
 For scope boundaries, use [Kernel/System Boundary](concepts/kernel-system-boundary.md).
+
+## First Variant Track
+
+Start with `vector_add` block-size tuning:
+
+1. run the AWS EC2 baseline matrix
+2. generate `experiments/aws-ec2-first-gpu-run.md` with `benchmark-report`
+3. sweep `benchmark-memory --backend triton --op vector_add --block-size`
+4. profile the best candidate with Nsight Compute
+5. compare against the PyTorch and default Triton baseline

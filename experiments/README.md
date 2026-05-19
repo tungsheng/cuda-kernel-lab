@@ -14,6 +14,7 @@ First live-GPU matrix:
 ```bash
 uv run benchmark-matrix --dry-run
 uv run benchmark-matrix
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
 The `experiments/results/` directory is ignored by default because JSONL runs

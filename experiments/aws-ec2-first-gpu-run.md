@@ -32,6 +32,7 @@ uv run gpu-info
 uv run pytest
 uv run benchmark-matrix --dry-run
 uv run benchmark-matrix
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
 ## Expected Result Files
@@ -44,14 +45,8 @@ uv run benchmark-matrix
 
 Fill this after the live GPU run. Do not enter estimated or synthetic numbers.
 
-| Primitive | Dtype | Fastest Backend | p50 | p95 | p99 | GB/s | TFLOP/s |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| memory | float32 |  |  |  |  |  |  |
-| memory | float16 |  |  |  |  |  |  |
-| softmax | float32 |  |  |  |  |  |  |
-| softmax | float16 |  |  |  |  |  |  |
-| norms | float32 |  |  |  |  |  |  |
-| norms | float16 |  |  |  |  |  |  |
+Run `benchmark-report` to replace this pending scaffold with a generated
+operation-level summary.
 
 ## Observation
 

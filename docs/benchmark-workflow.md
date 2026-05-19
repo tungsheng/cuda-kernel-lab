@@ -64,6 +64,20 @@ The default matrix runs memory, softmax, and normalization benchmarks for
 `float32` and `float16`, writing JSONL records under
 `experiments/results/aws-ec2-first-run/`.
 
+Generate the first report from those JSONL records:
+
+```bash
+uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
+```
+
+For the first `vector_add` strategy sweep, vary the Triton block size:
+
+```bash
+uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --block-size 512
+uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --block-size 1024
+uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --block-size 2048
+```
+
 ## Save Results
 
 Append JSONL records with `--output`:
