@@ -1,117 +1,75 @@
 # Live GPU On AWS EC2
 
-Use AWS EC2 as a disposable single-GPU Linux host for benchmark evidence. This
-repo does not need an EKS cluster or a long-running GPU machine. Terraform owns
-the benchmark instance, security group, AMI lookup, and local state under
-`infra/env/aws-gpu`.
+Use AWS EC2 for disposable single-GPU benchmark evidence. The normal path is
+one command: create a temporary EC2 key pair, launch a `g5.xlarge`, run the
+benchmark matrix, copy artifacts back, destroy Terraform resources, and delete
+the temporary key.
 
-Defaults:
+## Defaults
 
 - region: `us-west-2`
 - instance type: `g5.xlarge`
-- AMI source: AWS Deep Learning Base OSS NVIDIA Driver GPU Ubuntu 22.04,
-  resolved from AWS SSM Parameter Store
+- AMI: AWS Deep Learning Base OSS NVIDIA Driver GPU Ubuntu 22.04 from SSM
+- Terraform environment: `infra/env/aws-gpu`
+- raw JSONL: `experiments/results/aws-ec2/<run-id>/`
+- report: `experiments/reports/aws-ec2/<run-id>.md`
 
 ## Prerequisites
 
 - Terraform `>= 1.6`
-- AWS credentials for `us-west-2`
-- EC2 GPU quota for `g5.xlarge`
-- an EC2 key pair and matching local private key when using SSH/bootstrap
-- local `ssh` and `tar` when using the bootstrap path
+- AWS credentials and EC2 GPU quota in `us-west-2`
+- local `aws`, `ssh`, and `tar`
 
-## Recommended Scripted Launch
+## Recommended Flow
 
-Use the repo script when you want the closest equivalent to
-`gpu-inference-lab`'s `scripts/up`, but backed by a small Terraform EC2
-environment instead of an EKS platform:
+Preview the plan without touching AWS:
 
 ```bash
-./scripts/up \
+./scripts/live-benchmark --run-id <run-id> --dry-run
+```
+
+Run the full benchmark:
+
+```bash
+./scripts/live-benchmark --run-id <run-id>
+```
+
+Add matmul progression numbers when needed:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --include-matmul
+```
+
+Use an existing EC2 key pair only when you need to keep SSH access aligned with
+your own key inventory:
+
+```bash
+./scripts/live-benchmark \
+  --run-id <run-id> \
   --key-name <key-pair-name> \
   --key-file <key-file.pem>
 ```
 
-With a key pair and key file, the script:
+## Manual Host Flow
 
-- writes `infra/env/aws-gpu/local.auto.tfvars`
-- runs `terraform -chdir=infra/env/aws-gpu init`
-- runs `terraform -chdir=infra/env/aws-gpu apply -auto-approve`
-- uses the published VPC and EC2 Terraform modules to create a disposable
-  public subnet, optional SSH security group, and one `g5.xlarge` instance
-- resolves the GPU AMI from AWS SSM Parameter Store
-- syncs this working tree to `~/cuda-kernel-lab`
-- installs `uv`, syncs GPU dependencies, runs `gpu-info`, and prints the
-  benchmark matrix dry run
-
-Like `gpu-inference-lab`'s Karpenter GPU nodes, an infra-only launch can omit
-EC2 SSH keys:
+Use `scripts/up` and `scripts/down` when you want to inspect or operate the host
+manually:
 
 ```bash
-./scripts/up --skip-bootstrap
-```
-
-That path creates the host without a key pair and leaves SSH closed by default.
-
-Check the generated Terraform inputs without touching AWS:
-
-```bash
-./scripts/up \
-  --skip-bootstrap \
-  --dry-run
-```
-
-Use a named AWS profile or a different GPU shape explicitly:
-
-```bash
-./scripts/up \
-  --profile <aws-profile> \
-  --instance-type g6.xlarge \
-  --key-name <key-pair-name> \
-  --key-file <key-file.pem>
-```
-
-Use existing network controls when the disposable VPC path is not appropriate:
-
-```bash
-./scripts/up \
-  --key-name <key-pair-name> \
-  --key-file <key-file.pem> \
-  --subnet-id <subnet-id> \
-  --security-group-id <security-group-id>
-```
-
-After launch, SSH to the host and run the benchmark evidence pass:
-
-```bash
+./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
 ssh -i <key-file.pem> ubuntu@<public-ip>
 cd ~/cuda-kernel-lab
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
-uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
-```
-
-Add `--include-matmul` when collecting the first tiled matmul progression in
-the same session.
-
-Terminate the instance and remove the temporary network/security resources:
-
-```bash
+uv run benchmark-matrix \
+  --output-dir experiments/results/aws-ec2/<run-id> \
+  --include-vector-add-sweep \
+  --include-reduction-sweep
+uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ./scripts/down
 ```
 
-`./scripts/up` prints a matching `./scripts/down` command when you use a named
-profile, custom Terraform directory, or explicit tfvars file. By default,
-`./scripts/down` removes the generated default tfvars file after destroy and
-keeps explicit tfvars paths unless you pass `--remove-tfvars`.
-
-Run `./scripts/up --help` for all options, including `--skip-bootstrap`,
-`--no-public-ip`, `--ingress-cidr`, `--dry-run`, and `--tf-vars-file`.
-
-## Direct Terraform
-
-Use Terraform directly when you want to inspect the plan before creating
-anything. `key_name` and `ssh_ingress_cidr` are needed only when you want SSH
-access:
+Use `./scripts/up --skip-bootstrap` for an infra-only host without SSH
+bootstrap. Use direct Terraform only when you need to inspect or customize the
+plan:
 
 ```bash
 terraform -chdir=infra/env/aws-gpu init
@@ -120,91 +78,33 @@ terraform -chdir=infra/env/aws-gpu plan \
   -var 'key_name=<key-pair-name>' \
   -var 'ssh_ingress_cidr=<your-ip>/32'
 terraform -chdir=infra/env/aws-gpu apply tfplan
-```
-
-Common overrides:
-
-```bash
-terraform -chdir=infra/env/aws-gpu plan \
-  -var 'key_name=<key-pair-name>' \
-  -var 'ssh_ingress_cidr=<your-ip>/32' \
-  -var 'instance_type=g6.xlarge' \
-  -var 'subnet_id=<subnet-id>'
-```
-
-## Manual Host Preparation
-
-When you use direct Terraform or `./scripts/up --skip-bootstrap` with an EC2 key
-pair, SSH to the instance, then install `uv` and clone or copy this repo:
-
-```bash
-ssh -i <key-file.pem> ubuntu@<public-ip>
-uv_installer=$(mktemp)
-curl -LsSf https://astral.sh/uv/install.sh -o "$uv_installer"
-sh "$uv_installer"
-rm -f "$uv_installer"
-git clone <repo-url>
-cd cuda-kernel-lab
-uv sync --group dev --extra gpu
-```
-
-Confirm the host is ready:
-
-```bash
-uv run gpu-info
-uv run pytest
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
-```
-
-## Run The First Evidence Matrix
-
-```bash
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
-uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
-```
-
-This writes JSONL records to:
-
-```text
-experiments/results/aws-ec2-first-run/
-```
-
-Copy the JSONL files back to your workstation if you want to inspect them
-locally. Commit compact summaries, not large raw result dumps.
-
-## First Profiler Pass
-
-Start with one memory primitive and one fused kernel:
-
-```bash
-ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/memory-profiled.jsonl
-ncu --set full --target-processes all uv run benchmark-softmax --backend triton --device cuda --rows 4096 --cols 1024 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/softmax-profiled.jsonl
-ncu --set full --target-processes all uv run benchmark-swiglu --backend triton --device cuda --rows 4096 --cols 4096 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/swiglu-profiled.jsonl
-ncu --set full --target-processes all uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --output experiments/results/aws-ec2-first-run-profiled/matmul-profiled.jsonl
-```
-
-Save compact profiler notes under `profiling/reports/`.
-
-Generate a compact Markdown summary from a CSV/text Nsight Compute export:
-
-```bash
-uv run nsight-summary \
-  --input profiling/nsight_compute/vector-add.csv \
-  --output profiling/reports/vector-add-a10g.md \
-  --operation vector_add \
-  --strategy triton-block-size
-```
-
-## Terminate
-
-```bash
-./scripts/down
-```
-
-Or destroy directly with Terraform:
-
-```bash
 terraform -chdir=infra/env/aws-gpu destroy
 ```
 
-Terminate the instance as soon as benchmark evidence is collected.
+## Cleanup Verification
+
+After a live run, confirm local Terraform state is empty:
+
+```bash
+terraform -chdir=infra/env/aws-gpu state list
+```
+
+The live wrapper also removes its run-specific tfvars file and temporary private
+key under `.aws-gpu/live-benchmark/`.
+
+## Profiler Starting Point
+
+Start with the memory bottleneck and the strongest fused win:
+
+```bash
+ncu --set full --target-processes all \
+  uv run benchmark-memory --backend triton --device cuda --op vector_add \
+  --dtype float32 \
+  --output experiments/results/aws-ec2/<run-id>-profiled/memory-profiled.jsonl
+ncu --set full --target-processes all \
+  uv run benchmark-norms --backend triton --device cuda --op rmsnorm \
+  --rows 4096 --cols 4096 --dtype float16 \
+  --output experiments/results/aws-ec2/<run-id>-profiled/rmsnorm-profiled.jsonl
+```
+
+Save compact profiler notes under `profiling/reports/`.

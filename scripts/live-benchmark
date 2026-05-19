@@ -1,0 +1,538 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+print_stage() {
+  printf '==> %s\n' "$1"
+}
+
+require_commands() {
+  local missing=()
+  local command_name
+
+  for command_name in "$@"; do
+    if ! command -v "${command_name}" >/dev/null 2>&1; then
+      missing+=("${command_name}")
+    fi
+  done
+
+  if ((${#missing[@]} > 0)); then
+    die "missing required command(s): ${missing[*]}"
+  fi
+}
+
+require_value() {
+  local option=$1
+  local value=${2:-}
+
+  [[ -n "${value}" && "${value}" != --* ]] || die "${option} requires a value"
+}
+
+expand_path() {
+  local path=$1
+  local home_prefix
+
+  printf -v home_prefix '%b' '\x7e/'
+
+  if [[ "${path:0:2}" == "${home_prefix}" ]]; then
+    printf '%s/%s\n' "${HOME}" "${path#~/}"
+    return
+  fi
+
+  printf '%s\n' "${path}"
+}
+
+absolute_path() {
+  local path
+  path=$(expand_path "$1")
+
+  if [[ "${path}" == /* ]]; then
+    printf '%s\n' "${path}"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "${path}"
+  fi
+}
+
+AWS_REGION_NAME="${AWS_REGION:-us-west-2}"
+AWS_PROFILE_NAME="${AWS_PROFILE:-}"
+INSTANCE_TYPE="g5.xlarge"
+INSTANCE_NAME=""
+RUN_ID=""
+
+KEY_NAME=""
+KEY_FILE=""
+CREATE_TEMP_KEY=0
+TEMP_KEY_CREATED=0
+
+SSH_USER="ubuntu"
+REMOTE_DIR="cuda-kernel-lab"
+OUTPUT_ROOT="experiments/results/aws-ec2"
+REPORT_ROOT="experiments/reports/aws-ec2"
+INCLUDE_MATMUL=0
+DRY_RUN=0
+
+TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
+STATE_DIR="${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}"
+WORK_DIR=""
+TF_VARS_FILE=""
+
+RESULT_DIR=""
+REPORT_PATH=""
+GIT_COMMIT=""
+GIT_DIRTY="unknown"
+SSH_HOST=""
+INSTANCE_ID=""
+
+TERRAFORM_TOUCHED=0
+CLEANUP_DONE=0
+
+ssh_base_args=()
+
+usage() {
+  cat <<EOF
+Usage:
+  ./scripts/live-benchmark [options]
+
+Creates a disposable AWS EC2 GPU host, runs the live benchmark matrix, copies
+JSONL results and a Markdown report back into a run-id layout, then tears down
+the host and deletes any temporary EC2 key pair it created.
+
+Options:
+  --run-id <id>             Result run id. Default: UTC timestamp.
+  --key-name <name>         Existing EC2 key pair name. Requires --key-file.
+  --key-file <path>         Existing SSH private key. Requires --key-name.
+  --profile <name>          AWS CLI profile used by AWS CLI and Terraform.
+  --region <name>           AWS region. Default: ${AWS_REGION_NAME}
+  --instance-type <type>    EC2 GPU instance. Default: ${INSTANCE_TYPE}
+  --name <name>             EC2 Name tag. Default: cuda-kernel-lab-<run-id>
+  --include-matmul          Include the tiled matmul progression in the matrix.
+  --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
+  --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
+  --ssh-user <name>         SSH user. Default: ${SSH_USER}
+  --remote-dir <path>       Remote repo directory. Default: ${REMOTE_DIR}
+  --tf-dir <path>           Terraform environment. Default: ${TF_DIR}
+  --dry-run                 Print the planned workflow without touching AWS.
+
+Examples:
+  ./scripts/live-benchmark
+  ./scripts/live-benchmark --run-id 2026-05-19-a10g-baseline
+  ./scripts/live-benchmark --profile personal --instance-type g6.xlarge --include-matmul
+  ./scripts/live-benchmark --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
+EOF
+}
+
+parse_args() {
+  while (($# > 0)); do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --run-id)
+        require_value "$1" "${2:-}"
+        RUN_ID=${2:-}
+        shift 2
+        ;;
+      --key-name)
+        require_value "$1" "${2:-}"
+        KEY_NAME=${2:-}
+        shift 2
+        ;;
+      --key-file)
+        require_value "$1" "${2:-}"
+        KEY_FILE=$(absolute_path "${2:-}")
+        shift 2
+        ;;
+      --profile)
+        require_value "$1" "${2:-}"
+        AWS_PROFILE_NAME=${2:-}
+        shift 2
+        ;;
+      --region)
+        require_value "$1" "${2:-}"
+        AWS_REGION_NAME=${2:-}
+        shift 2
+        ;;
+      --instance-type)
+        require_value "$1" "${2:-}"
+        INSTANCE_TYPE=${2:-}
+        shift 2
+        ;;
+      --name)
+        require_value "$1" "${2:-}"
+        INSTANCE_NAME=${2:-}
+        shift 2
+        ;;
+      --include-matmul)
+        INCLUDE_MATMUL=1
+        shift
+        ;;
+      --output-root)
+        require_value "$1" "${2:-}"
+        OUTPUT_ROOT=${2:-}
+        shift 2
+        ;;
+      --report-root)
+        require_value "$1" "${2:-}"
+        REPORT_ROOT=${2:-}
+        shift 2
+        ;;
+      --ssh-user)
+        require_value "$1" "${2:-}"
+        SSH_USER=${2:-}
+        shift 2
+        ;;
+      --remote-dir)
+        require_value "$1" "${2:-}"
+        REMOTE_DIR=${2:-}
+        shift 2
+        ;;
+      --tf-dir)
+        require_value "$1" "${2:-}"
+        TF_DIR=$(absolute_path "${2:-}")
+        shift 2
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
+validate_slug() {
+  local label=$1
+  local value=$2
+
+  [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+    die "${label} must use only letters, numbers, dots, underscores, and dashes"
+  }
+}
+
+validate_relative_path() {
+  local label=$1
+  local value=$2
+
+  [[ "${value}" =~ ^[A-Za-z0-9._/-]+$ ]] || die "${label} contains unsafe characters"
+  [[ "${value}" != /* && "${value}" != *..* ]] || {
+    die "${label} must be a relative path without '..'"
+  }
+  [[ "${value}" != "." && "${value}" != .* && "${value}" != */.* ]] || {
+    die "${label} must not target hidden or current-directory paths"
+  }
+}
+
+resolve_defaults() {
+  if [[ -z "${RUN_ID}" ]]; then
+    RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+  fi
+  validate_slug "--run-id" "${RUN_ID}"
+
+  WORK_DIR="${STATE_DIR}/live-benchmark"
+  TF_VARS_FILE="${WORK_DIR}/${RUN_ID}.auto.tfvars"
+  RESULT_DIR="${OUTPUT_ROOT}/${RUN_ID}"
+  REPORT_PATH="${REPORT_ROOT}/${RUN_ID}.md"
+
+  if [[ -z "${INSTANCE_NAME}" ]]; then
+    INSTANCE_NAME="cuda-kernel-lab-${RUN_ID}"
+  fi
+
+  if [[ -z "${KEY_NAME}" && -z "${KEY_FILE}" ]]; then
+    CREATE_TEMP_KEY=1
+    KEY_NAME="cuda-kernel-lab-${RUN_ID}"
+    KEY_FILE="${WORK_DIR}/${RUN_ID}.pem"
+  elif [[ -n "${KEY_NAME}" && -n "${KEY_FILE}" ]]; then
+    CREATE_TEMP_KEY=0
+  else
+    die "--key-name and --key-file must be provided together"
+  fi
+}
+
+validate_inputs() {
+  [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
+  [[ "${SSH_USER}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] || die "--ssh-user contains unsafe characters"
+  validate_relative_path "--remote-dir" "${REMOTE_DIR}"
+  validate_relative_path "--output-root" "${OUTPUT_ROOT}"
+  validate_relative_path "--report-root" "${REPORT_ROOT}"
+
+  if [[ "${CREATE_TEMP_KEY}" == "0" && ! -f "${KEY_FILE}" ]]; then
+    die "SSH key file does not exist: ${KEY_FILE}"
+  fi
+
+  if [[ "${DRY_RUN}" == "0" ]]; then
+    [[ ! -e "${REPO_ROOT}/${RESULT_DIR}" ]] || die "result directory already exists: ${RESULT_DIR}"
+    [[ ! -e "${REPO_ROOT}/${REPORT_PATH}" ]] || die "report already exists: ${REPORT_PATH}"
+  fi
+}
+
+collect_source_metadata() {
+  GIT_COMMIT=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)
+
+  local status
+  if status=$(git -C "${REPO_ROOT}" status --short 2>/dev/null); then
+    if [[ -n "${status}" ]]; then
+      GIT_DIRTY="true"
+    else
+      GIT_DIRTY="false"
+    fi
+  fi
+}
+
+print_command() {
+  printf '  '
+  printf '%q ' "$@"
+  printf '\n'
+}
+
+up_command() {
+  local -a cmd
+  cmd=(
+    "${REPO_ROOT}/scripts/up"
+    --key-name "${KEY_NAME}"
+    --key-file "${KEY_FILE}"
+    --region "${AWS_REGION_NAME}"
+    --instance-type "${INSTANCE_TYPE}"
+    --name "${INSTANCE_NAME}"
+    --tf-dir "${TF_DIR}"
+    --tf-vars-file "${TF_VARS_FILE}"
+  )
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    cmd+=(--profile "${AWS_PROFILE_NAME}")
+  fi
+  printf '%s\0' "${cmd[@]}"
+}
+
+down_command() {
+  local -a cmd
+  cmd=(
+    "${REPO_ROOT}/scripts/down"
+    --region "${AWS_REGION_NAME}"
+    --tf-dir "${TF_DIR}"
+    --tf-vars-file "${TF_VARS_FILE}"
+    --remove-tfvars
+  )
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    cmd+=(--profile "${AWS_PROFILE_NAME}")
+  fi
+  printf '%s\0' "${cmd[@]}"
+}
+
+remote_benchmark_command() {
+  local command
+
+  command="cd ~/${REMOTE_DIR}"
+  command+=" && export PATH=\"\$HOME/.local/bin:\$PATH\""
+  if [[ -n "${GIT_COMMIT}" ]]; then
+    command+=" && export CUDA_KERNEL_LAB_GIT_COMMIT=${GIT_COMMIT}"
+  fi
+  command+=" && export CUDA_KERNEL_LAB_GIT_DIRTY=${GIT_DIRTY}"
+  command+=" && uv run benchmark-matrix --output-dir ${RESULT_DIR}"
+  command+=" --include-vector-add-sweep --include-reduction-sweep"
+  if [[ "${INCLUDE_MATMUL}" == "1" ]]; then
+    command+=" --include-matmul"
+  fi
+  command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
+
+  printf '%s\n' "${command}"
+}
+
+print_plan() {
+  printf '\nLive benchmark plan:\n'
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    printf '  Mode: dry run; no AWS or Terraform commands will run\n'
+  fi
+  printf '  Run id: %s\n' "${RUN_ID}"
+  printf '  Region: %s\n' "${AWS_REGION_NAME}"
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    printf '  AWS profile: %s\n' "${AWS_PROFILE_NAME}"
+  fi
+  printf '  Instance: %s\n' "${INSTANCE_TYPE}"
+  if [[ "${CREATE_TEMP_KEY}" == "1" ]]; then
+    printf '  EC2 key pair: temporary %s\n' "${KEY_NAME}"
+    printf '  Local private key: %s (deleted after run)\n' "${KEY_FILE}"
+  else
+    printf '  EC2 key pair: existing %s\n' "${KEY_NAME}"
+    printf '  Local private key: %s (left untouched)\n' "${KEY_FILE}"
+  fi
+  printf '  Terraform variables: %s\n' "${TF_VARS_FILE}"
+  printf '  Raw results: %s\n' "${RESULT_DIR}"
+  printf '  Report: %s\n' "${REPORT_PATH}"
+  printf '  Source git commit: %s\n' "${GIT_COMMIT:-unknown}"
+  printf '  Source git dirty: %s\n' "${GIT_DIRTY}"
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    printf '\nCommands:\n'
+    local -a up_cmd
+    mapfile -d '' -t up_cmd < <(up_command)
+    print_command "${up_cmd[@]}"
+    printf '  ssh %s@<host> %q\n' "${SSH_USER}" "$(remote_benchmark_command)"
+    local -a down_cmd
+    mapfile -d '' -t down_cmd < <(down_command)
+    print_command "${down_cmd[@]}"
+  fi
+}
+
+ensure_empty_terraform_state() {
+  local state_resources
+
+  print_stage "checking Terraform state"
+  terraform -chdir="${TF_DIR}" init -input=false
+  state_resources=$(terraform -chdir="${TF_DIR}" state list 2>/dev/null || true)
+  [[ -z "${state_resources}" ]] || {
+    printf '%s\n' "${state_resources}" >&2
+    die "Terraform state is not empty; run ./scripts/down or use a clean state before live-benchmark"
+  }
+}
+
+create_temp_key_pair() {
+  [[ "${CREATE_TEMP_KEY}" == "1" ]] || return 0
+
+  print_stage "creating temporary EC2 key pair"
+  mkdir -p "${WORK_DIR}"
+  if ! aws ec2 create-key-pair \
+    --key-name "${KEY_NAME}" \
+    --region "${AWS_REGION_NAME}" \
+    --query KeyMaterial \
+    --output text > "${KEY_FILE}"; then
+    rm -f "${KEY_FILE}"
+    die "failed to create temporary EC2 key pair: ${KEY_NAME}"
+  fi
+  TEMP_KEY_CREATED=1
+  chmod 600 "${KEY_FILE}"
+}
+
+configure_ssh_args() {
+  mkdir -p "${STATE_DIR}"
+  ssh_base_args=(
+    -i "${KEY_FILE}"
+    -o StrictHostKeyChecking=accept-new
+    -o UserKnownHostsFile="${STATE_DIR}/known_hosts"
+    -o ConnectTimeout=10
+    -o ServerAliveInterval=15
+  )
+}
+
+ssh_remote() {
+  # shellcheck disable=SC2029
+  ssh "${ssh_base_args[@]}" "${SSH_USER}@${SSH_HOST}" "$@"
+}
+
+load_outputs() {
+  INSTANCE_ID=$(terraform -chdir="${TF_DIR}" output -raw instance_id)
+  SSH_HOST=$(terraform -chdir="${TF_DIR}" output -raw ssh_host)
+}
+
+run_up() {
+  local -a cmd
+  mapfile -d '' -t cmd < <(up_command)
+
+  print_stage "provisioning GPU host"
+  TERRAFORM_TOUCHED=1
+  "${cmd[@]}"
+}
+
+run_remote_benchmark() {
+  print_stage "running live benchmark matrix"
+  ssh_remote "$(remote_benchmark_command)"
+}
+
+pull_artifacts() {
+  print_stage "copying benchmark artifacts back"
+  mkdir -p "${REPO_ROOT}/${OUTPUT_ROOT}" "${REPO_ROOT}/${REPORT_ROOT}"
+  ssh_remote "cd ~/${REMOTE_DIR} && tar -czf - ${RESULT_DIR} ${REPORT_PATH}" \
+    | tar -xzf - -C "${REPO_ROOT}"
+}
+
+cleanup_resources() {
+  local cleanup_status=0
+
+  if [[ "${CLEANUP_DONE}" == "1" ]]; then
+    return 0
+  fi
+  CLEANUP_DONE=1
+
+  set +e
+
+  if [[ "${TERRAFORM_TOUCHED}" == "1" ]]; then
+    local -a cmd
+    mapfile -d '' -t cmd < <(down_command)
+    print_stage "tearing down GPU host"
+    "${cmd[@]}" || cleanup_status=1
+  fi
+
+  if [[ "${TEMP_KEY_CREATED}" == "1" ]]; then
+    print_stage "deleting temporary EC2 key pair"
+    aws ec2 delete-key-pair \
+      --key-name "${KEY_NAME}" \
+      --region "${AWS_REGION_NAME}" >/dev/null || cleanup_status=1
+    rm -f "${KEY_FILE}" || cleanup_status=1
+  fi
+
+  set -e
+  return "${cleanup_status}"
+}
+
+cleanup_trap() {
+  local status=$?
+  local cleanup_status=0
+
+  cleanup_resources || cleanup_status=$?
+  if [[ "${status}" == "0" && "${cleanup_status}" != "0" ]]; then
+    status=${cleanup_status}
+  fi
+  exit "${status}"
+}
+
+print_complete() {
+  printf '\nLive benchmark complete:\n'
+  printf '  Instance: %s (terminated)\n' "${INSTANCE_ID}"
+  printf '  Raw results: %s\n' "${RESULT_DIR}"
+  printf '  Report: %s\n' "${REPORT_PATH}"
+  if [[ "${TEMP_KEY_CREATED}" == "1" ]]; then
+    printf '  EC2 key pair deleted: %s\n' "${KEY_NAME}"
+    printf '  Local private key removed: %s\n' "${KEY_FILE}"
+  fi
+}
+
+main() {
+  parse_args "$@"
+  resolve_defaults
+  validate_inputs
+  collect_source_metadata
+  print_plan
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    return 0
+  fi
+
+  require_commands aws terraform ssh tar git
+  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+    export AWS_PROFILE="${AWS_PROFILE_NAME}"
+  fi
+
+  ensure_empty_terraform_state
+  trap cleanup_trap EXIT
+
+  create_temp_key_pair
+  run_up
+  load_outputs
+  configure_ssh_args
+  run_remote_benchmark
+  pull_artifacts
+  cleanup_resources
+  trap - EXIT
+  print_complete
+}
+
+main "$@"

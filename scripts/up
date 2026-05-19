@@ -421,6 +421,7 @@ sync_repo() {
   ssh_remote "rm -rf ~/${REMOTE_DIR} && mkdir -p ~/${REMOTE_DIR}"
 
   tar \
+    --no-xattrs \
     --exclude='.aws-gpu' \
     --exclude='.git' \
     --exclude='.mypy_cache' \

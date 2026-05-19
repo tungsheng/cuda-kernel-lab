@@ -73,7 +73,7 @@ def render_markdown(
             "",
             "## Interpretation",
             "",
-            "Pending human interpretation against the benchmark result.",
+            "Compare these counters against the benchmark result before choosing the next change.",
             "",
             "## Follow-Up",
             "",

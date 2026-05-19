@@ -48,16 +48,15 @@ Write comparisons in this order:
 
 For scope boundaries, use [Kernel/System Boundary](concepts/kernel-system-boundary.md).
 
-## First Variant Track
+## Memory Variant Track
 
 Start with `vector_add` block-size tuning:
 
-1. run the AWS EC2 baseline matrix
-2. generate `experiments/aws-ec2-first-gpu-run.md` with `benchmark-report`
-3. run `benchmark-matrix --include-vector-add-sweep --include-reduction-sweep`
-   to capture the first PyTorch-vs-Triton memory strategy variants
-4. profile the best candidate with Nsight Compute
-5. compare against the PyTorch and default Triton baseline
+1. run `./scripts/live-benchmark --run-id <run-id>`
+2. read `experiments/reports/aws-ec2/<run-id>.md`
+3. profile the Triton memory bottleneck with Nsight Compute
+4. compare against the PyTorch and default Triton baseline
+5. decide whether a narrower launch/config sweep is justified
 
 ## Second Variant Track
 

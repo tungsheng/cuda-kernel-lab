@@ -25,51 +25,32 @@ uv sync --group dev --extra gpu
 uv run gpu-info
 ```
 
-Run the first benchmark:
+Run a local benchmark:
 
 ```bash
 uv run benchmark-memory --backend all --op all --numel 16777216 --dtype float32
 ```
 
-Print the first live-GPU benchmark matrix:
+On a CUDA host, collect the standard matrix and report:
 
 ```bash
 uv run benchmark-matrix --dry-run
+uv run benchmark-matrix --output-dir experiments/results/aws-ec2/<run-id>
+uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ```
 
-Include the first `vector_add` block-size sweep when collecting strategy
-evidence:
+For the AWS evidence run, let the wrapper own the full lifecycle: temporary EC2
+key pair, Terraform apply, benchmark, artifact copyback, Terraform destroy, and
+key cleanup.
 
 ```bash
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
+./scripts/live-benchmark --run-id <run-id>
 ```
 
-Generate a report after a live GPU matrix run:
-
-```bash
-uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
-```
-
-On a CUDA host, collect GPU numbers explicitly:
-
-```bash
-uv run benchmark-memory --backend all --device cuda --op all
-uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
-uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
-uv run benchmark-swiglu --backend all --device cuda --rows 4096 --cols 4096
-uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024
-```
-
-Spin up a Terraform-managed disposable AWS EC2 GPU host when you do not have
-local CUDA:
+Use lower-level commands only when you want to inspect the host manually:
 
 ```bash
 ./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
-```
-
-Tear it down after collecting evidence:
-
-```bash
 ./scripts/down
 ```
 

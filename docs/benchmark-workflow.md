@@ -66,44 +66,44 @@ For a baseline-only run, print the matrix first:
 uv run benchmark-matrix --dry-run
 ```
 
-Then run it on the CUDA host:
+Then run it on the CUDA host. Without `--output-dir`, the matrix writes to
+`experiments/results/aws-ec2/manual-run`.
 
 ```bash
-uv run benchmark-matrix
+uv run benchmark-matrix --output-dir experiments/results/aws-ec2/<run-id>
 ```
 
 The default matrix runs memory, softmax, normalization, and SwiGLU benchmarks for
-`float32` and `float16`, writing JSONL records under
-`experiments/results/aws-ec2-first-run/`.
+`float32` and `float16`. Use a run-id directory under
+`experiments/results/aws-ec2/` for live GPU evidence.
 
 Generate a report from those JSONL records:
 
 ```bash
-uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
+uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ```
 
 `benchmark-report` reads every `.jsonl` file in the input directory, so write
 small sweeps into the same run directory when they belong to the same evidence
 note.
 
-For the first AWS EC2 evidence run, collect the baseline matrix and first
-strategy sweeps in one disposable GPU session:
+For AWS EC2 evidence, collect the baseline matrix and strategy sweeps in one
+disposable GPU session:
 
 ```bash
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
-uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
+./scripts/live-benchmark --run-id <run-id>
 ```
 
-Add `--include-matmul` when you want the first tiled matmul progression numbers
-in the same run directory.
+Add `--include-matmul` when you want tiled matmul progression numbers in the
+same run directory. When running the matrix manually, pass
+`--include-vector-add-sweep --include-reduction-sweep` and the same
+`--output-dir experiments/results/aws-ec2/<run-id>`.
 
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
-runs, `512` and `2048`, to
-`experiments/results/aws-ec2-first-run/vector-add-block-size.jsonl`. It also
-appends the first non-default `reduction_sum` strategy comparison to
-`experiments/results/aws-ec2-first-run/reduction-strategy.jsonl`.
+runs, `512` and `2048`, to the run's `vector-add-block-size.jsonl`. It also
+appends the non-default `reduction_sum` strategy comparison to
+`reduction-strategy.jsonl`.
 
 ## Save Results
 

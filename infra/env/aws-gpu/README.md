@@ -3,7 +3,13 @@
 This environment creates the disposable single-node EC2 GPU host used for CUDA
 Kernel Lab benchmark evidence.
 
-Use the wrapper scripts for the common path:
+Use the end-to-end wrapper for benchmark evidence:
+
+```bash
+./scripts/live-benchmark --run-id <run-id>
+```
+
+Use the host lifecycle scripts when you want to inspect the instance manually:
 
 ```bash
 ./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>

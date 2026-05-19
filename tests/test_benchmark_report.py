@@ -100,6 +100,7 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
     rows = benchmark_report.load_report_rows(tmp_path)
     report = benchmark_report.render_markdown(rows, input_dir=tmp_path)
 
+    assert "# GPU Benchmark Report" in report
     assert "Status: generated from benchmark JSONL" in report
     assert "- Git commit: `abc123`" in report
     assert "- CUDA devices: `NVIDIA A10G" in report
@@ -107,6 +108,11 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
         "| softmax | softmax | float16 | 4096x1024 | "
         "traffic_model=fused | triton | triton-fused-row-softmax | 1.5 | 50 | 1 |"
     ) in report
+    assert "- Loaded 2 benchmark rows from 1 result file." in report
+    assert (
+        "- Largest Triton wins vs torch: softmax softmax float16 traffic_model=fused (2x)."
+        in report
+    )
     assert "| softmax | softmax | float16 | 4096x1024 | traffic_model=fused" in report
     assert "| triton | triton-fused-row-softmax | pass | 1.5 | 1.6 | 1.7 |" in report
     assert "| 2 | 1.067 |" in report
@@ -148,8 +154,20 @@ def test_report_dry_run_prints_without_writing(
         ]
     )
 
-    assert "# AWS EC2 First GPU Run" in capsys.readouterr().out
+    assert "# GPU Benchmark Report" in capsys.readouterr().out
     assert not output_path.exists()
+
+
+def test_default_output_uses_run_id_layout() -> None:
+    assert benchmark_report.default_output_for(
+        Path("experiments/results/aws-ec2/2026-05-19-a10g-baseline")
+    ) == Path("experiments/reports/aws-ec2/2026-05-19-a10g-baseline.md")
+
+
+def test_default_output_falls_back_to_reports_dir() -> None:
+    assert benchmark_report.default_output_for(Path("custom/results")) == Path(
+        "experiments/reports/aws-ec2/benchmark-report.md"
+    )
 
 
 def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:

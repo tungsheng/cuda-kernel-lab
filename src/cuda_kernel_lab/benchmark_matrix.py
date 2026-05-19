@@ -1,4 +1,4 @@
-"""Run or print the first live-GPU benchmark matrix."""
+"""Run or print the standard live-GPU benchmark matrix."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_OUTPUT_DIR = Path("experiments/results/aws-ec2-first-run")
+DEFAULT_OUTPUT_DIR = Path("experiments/results/aws-ec2/manual-run")
 DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
 DEFAULT_MEMORY_BLOCK_SIZE = 1024
@@ -340,7 +340,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--include-matmul",
         action="store_true",
-        help="Add the first tiled matmul benchmark commands.",
+        help="Add tiled matmul benchmark commands.",
     )
     parser.add_argument("--matmul-block-m", type=int, default=DEFAULT_MATMUL_BLOCK_M)
     parser.add_argument("--matmul-block-n", type=int, default=DEFAULT_MATMUL_BLOCK_N)
@@ -354,7 +354,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--include-vector-add-sweep",
         action="store_true",
-        help="Add the first vector_add block-size strategy sweep.",
+        help="Add the vector_add block-size strategy sweep.",
     )
     parser.add_argument(
         "--vector-add-sweep-block-sizes",
@@ -364,7 +364,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--include-reduction-sweep",
         action="store_true",
-        help="Add the first reduction_sum strategy sweep.",
+        help="Add the reduction_sum strategy sweep.",
     )
     parser.add_argument(
         "--reduction-sweep-strategies",

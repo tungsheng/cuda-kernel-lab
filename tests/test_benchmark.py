@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from cuda_kernel_lab.benchmark import BenchmarkResult, CorrectnessResult
+import argparse
+
+from cuda_kernel_lab.benchmark import BenchmarkResult, CorrectnessResult, collect_run_metadata
 
 
 def test_benchmark_result_includes_strategy_and_correctness_metadata() -> None:
@@ -33,3 +35,13 @@ def test_benchmark_result_includes_strategy_and_correctness_metadata() -> None:
     assert payload["parameters"] == {"block_size": 1024}
     assert payload["correctness"]["checked"] is True
     assert payload["correctness"]["passed"] is True
+
+
+def test_run_metadata_can_use_exported_git_context(monkeypatch) -> None:
+    monkeypatch.setenv("CUDA_KERNEL_LAB_GIT_COMMIT", "abc123")
+    monkeypatch.setenv("CUDA_KERNEL_LAB_GIT_DIRTY", "false")
+
+    metadata = collect_run_metadata("memory_bandwidth", argparse.Namespace(output="results.jsonl"))
+
+    assert metadata.git_commit == "abc123"
+    assert metadata.git_dirty is False

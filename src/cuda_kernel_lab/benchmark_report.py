@@ -6,12 +6,15 @@ import argparse
 import json
 import math
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_INPUT_DIR = Path("experiments/results/aws-ec2-first-run")
-DEFAULT_OUTPUT = Path("experiments/aws-ec2-first-gpu-run.md")
+DEFAULT_INPUT_DIR = Path("experiments/results/aws-ec2/manual-run")
+RUN_RESULTS_ROOT = Path("experiments/results/aws-ec2")
+RUN_REPORT_ROOT = Path("experiments/reports/aws-ec2")
+DEFAULT_OUTPUT = RUN_REPORT_ROOT / "benchmark-report.md"
 NOISE_RATIO_THRESHOLD = 1.20
 
 
@@ -58,20 +61,20 @@ def load_report_rows(input_dir: Path) -> list[ReportRow]:
 
 
 def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
-    """Render a compact first-run Markdown report."""
+    """Render a compact Markdown report."""
 
     if not rows:
         raise ValueError(f"no benchmark JSONL records found under {input_dir}")
 
     lines = [
-        "# AWS EC2 First GPU Run",
+        "# GPU Benchmark Report",
         "",
         "Status: generated from benchmark JSONL",
         "",
         "## Question",
         "",
-        "What are the first baseline PyTorch and Triton measurements for the CUDA Kernel",
-        "Lab benchmark matrix on a disposable AWS EC2 `g5.xlarge` host in `us-west-2`?",
+        "What are the baseline PyTorch and Triton measurements for this CUDA",
+        "Kernel Lab benchmark run?",
         "",
         "## Result Files",
         "",
@@ -140,15 +143,15 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "",
             "## Observation",
             "",
-            "Pending human interpretation.",
+            *_observation_lines(rows),
             "",
             "## Interpretation",
             "",
-            "Pending profiler validation and strategy comparison.",
+            *_interpretation_lines(rows),
             "",
             "## Next Question",
             "",
-            "Which memory-bandwidth strategy variant should be tested first for `vector_add`?",
+            _next_question(rows),
             "",
         ]
     )
@@ -158,7 +161,7 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--dry-run", action="store_true", help="Print report without writing it.")
     return parser.parse_args(argv)
 
@@ -167,13 +170,34 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     rows = load_report_rows(args.input_dir)
     report = render_markdown(rows, input_dir=args.input_dir)
+    output = args.output or default_output_for(args.input_dir)
     if args.dry_run:
         print(report)
         return
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(report, encoding="utf-8")
-    print(f"Wrote benchmark report to {args.output}", file=sys.stderr)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report, encoding="utf-8")
+    print(f"Wrote benchmark report to {output}", file=sys.stderr)
+
+
+def default_output_for(input_dir: Path) -> Path:
+    """Return the report path that matches a benchmark input directory."""
+
+    normalized = input_dir
+    if normalized.is_absolute():
+        try:
+            normalized = normalized.relative_to(Path.cwd())
+        except ValueError:
+            return DEFAULT_OUTPUT
+
+    try:
+        run_path = normalized.relative_to(RUN_RESULTS_ROOT)
+    except ValueError:
+        return DEFAULT_OUTPUT
+
+    if len(run_path.parts) != 1 or not run_path.parts[0]:
+        return DEFAULT_OUTPUT
+    return RUN_REPORT_ROOT / f"{run_path.parts[0]}.md"
 
 
 def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) -> ReportRow:
@@ -251,6 +275,129 @@ def _fastest_rows(rows: list[ReportRow]) -> list[ReportRow]:
         if current is None or row.p50_ms < current.p50_ms:
             fastest[key] = row
     return sorted(fastest.values(), key=_sort_key)
+
+
+def _observation_lines(rows: list[ReportRow]) -> list[str]:
+    sources = {row.source for row in rows}
+    correctness = Counter(row.correctness for row in rows)
+    fastest_backends = Counter(row.backend for row in _fastest_rows(rows))
+    noisy_rows = _noisy_rows(rows)
+    triton_wins = _top_triton_wins(rows)
+
+    lines = [
+        f"- Loaded {len(rows)} {_plural(len(rows), 'benchmark row')} from "
+        f"{len(sources)} {_plural(len(sources), 'result file')}.",
+        f"- Fastest backend split: {_counter_label(fastest_backends)}.",
+    ]
+    if correctness == Counter({"pass": len(rows)}):
+        lines.append(f"- All {len(rows)} correctness checks passed.")
+    else:
+        lines.append(f"- Correctness summary: {_counter_label(correctness)}.")
+
+    if triton_wins:
+        lines.append(f"- Largest Triton wins vs torch: {_row_list_label(triton_wins)}.")
+    else:
+        lines.append("- No Triton rows beat the matching torch baseline in this result set.")
+
+    if noisy_rows:
+        lines.append(
+            f"- Noisy rows at p95/p50 >= {_fmt(NOISE_RATIO_THRESHOLD)}: "
+            f"{_row_list_label(noisy_rows)}."
+        )
+    else:
+        threshold = _fmt(NOISE_RATIO_THRESHOLD)
+        lines.append(f"- No rows exceeded the {threshold} p95/p50 noise threshold.")
+
+    return lines
+
+
+def _interpretation_lines(rows: list[ReportRow]) -> list[str]:
+    lines: list[str] = []
+    fastest = _fastest_rows(rows)
+
+    if any(
+        row.backend == "triton" and row.speedup_vs_torch is not None and row.speedup_vs_torch >= 2
+        for row in rows
+    ):
+        lines.append(
+            "- Triton is strongest where a fused kernel removes framework overhead or "
+            "intermediate memory traffic."
+        )
+
+    memory_fastest = [row for row in fastest if row.primitive == "memory"]
+    if memory_fastest and all(row.backend == "torch" for row in memory_fastest):
+        lines.append(
+            "- Memory primitive baselines still favor PyTorch; profile before adding "
+            "another broad launch-parameter sweep."
+        )
+
+    if _noisy_rows(rows):
+        lines.append(
+            "- Noisy rows should be profiled or rerun before treating their p50 latency as stable."
+        )
+
+    first_run = rows[0].run
+    if not first_run.get("git_commit") or first_run.get("git_dirty") is None:
+        lines.append(
+            "- Source git metadata is missing; use `scripts/live-benchmark` or export "
+            "`CUDA_KERNEL_LAB_GIT_COMMIT` and `CUDA_KERNEL_LAB_GIT_DIRTY` for SSH/tar runs."
+        )
+
+    return lines or ["- Use the fastest-by-operation table to choose the next profiler target."]
+
+
+def _next_question(rows: list[ReportRow]) -> str:
+    if _noisy_rows(rows):
+        return "What does Nsight Compute show for the noisy Triton rows and the largest fused win?"
+
+    memory_fastest = [row for row in _fastest_rows(rows) if row.primitive == "memory"]
+    if memory_fastest and all(row.backend == "torch" for row in memory_fastest):
+        return "What does Nsight Compute show for the Triton memory primitive bottleneck?"
+
+    return "Which fastest Triton operation should be profiled next?"
+
+
+def _top_triton_wins(rows: list[ReportRow]) -> list[ReportRow]:
+    wins = [
+        row
+        for row in rows
+        if row.backend == "triton"
+        and row.speedup_vs_torch is not None
+        and row.speedup_vs_torch > 1
+    ]
+    return sorted(wins, key=lambda row: row.speedup_vs_torch or 0, reverse=True)[:3]
+
+
+def _noisy_rows(rows: list[ReportRow]) -> list[ReportRow]:
+    noisy = [
+        row
+        for row in rows
+        if row.noise_ratio is not None and row.noise_ratio >= NOISE_RATIO_THRESHOLD
+    ]
+    return sorted(noisy, key=lambda row: row.noise_ratio or 0, reverse=True)[:3]
+
+
+def _counter_label(counter: Counter[str]) -> str:
+    return ", ".join(f"{key} {count}" for key, count in sorted(counter.items()))
+
+
+def _row_list_label(rows: list[ReportRow]) -> str:
+    return "; ".join(_row_label(row) for row in rows)
+
+
+def _row_label(row: ReportRow) -> str:
+    label = f"{row.primitive} {row.operation} {row.dtype} {row.variant}"
+    if row.speedup_vs_torch is not None and row.speedup_vs_torch > 1:
+        return f"{label} ({_fmt(row.speedup_vs_torch)}x)"
+    if row.noise_ratio is not None and row.noise_ratio >= NOISE_RATIO_THRESHOLD:
+        return f"{label} ({_fmt(row.noise_ratio)} noise)"
+    return label
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    if count == 1:
+        return singular
+    return plural or f"{singular}s"
 
 
 def _primitive_label(benchmark: str) -> str:

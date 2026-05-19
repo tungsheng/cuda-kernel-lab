@@ -9,12 +9,25 @@ Recommended result output:
 uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
 ```
 
-First live-GPU evidence run:
+Live-GPU evidence run on disposable AWS EC2:
+
+```bash
+./scripts/live-benchmark --run-id <run-id>
+```
+
+This writes raw JSONL under `experiments/results/aws-ec2/<run-id>/` and a
+compact report under `experiments/reports/aws-ec2/<run-id>.md`.
+
+Manual live-GPU matrix collection:
 
 ```bash
 uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
-uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
-uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
+uv run benchmark-matrix \
+  --output-dir experiments/results/aws-ec2/<run-id> \
+  --include-vector-add-sweep \
+  --include-reduction-sweep
+uv run benchmark-report \
+  --input-dir experiments/results/aws-ec2/<run-id>
 ```
 
 The `experiments/results/` directory is ignored by default because JSONL runs

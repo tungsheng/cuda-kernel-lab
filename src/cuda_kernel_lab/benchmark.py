@@ -145,7 +145,7 @@ def collect_run_metadata(benchmark: str, args: Any) -> BenchmarkRunMetadata:
         args=_jsonable_mapping(vars(args)),
         command=" ".join(shlex.quote(part) for part in sys.argv),
         timestamp_utc=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-        git_commit=_git_output("rev-parse", "HEAD"),
+        git_commit=_git_commit(),
         git_dirty=_git_dirty(),
         host={
             "platform": platform.platform(),
@@ -353,8 +353,25 @@ def _git_output(*args: str) -> str | None:
     return result.stdout.strip() or None
 
 
+def _git_commit() -> str | None:
+    return os.environ.get("CUDA_KERNEL_LAB_GIT_COMMIT") or _git_output("rev-parse", "HEAD")
+
+
 def _git_dirty() -> bool | None:
+    env_value = os.environ.get("CUDA_KERNEL_LAB_GIT_DIRTY")
+    if env_value is not None:
+        return _env_bool(env_value)
+
     status = _git_output("status", "--short")
     if status is None:
         return None
     return bool(status)
+
+
+def _env_bool(value: str) -> bool | None:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "dirty"}:
+        return True
+    if normalized in {"0", "false", "no", "clean"}:
+        return False
+    return None
