@@ -40,6 +40,7 @@ uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 - `experiments/results/aws-ec2-first-run/memory.jsonl`
 - `experiments/results/aws-ec2-first-run/softmax.jsonl`
 - `experiments/results/aws-ec2-first-run/norms.jsonl`
+- `experiments/results/aws-ec2-first-run/swiglu.jsonl`
 - `experiments/results/aws-ec2-first-run/vector-add-block-size.jsonl`
 - `experiments/results/aws-ec2-first-run/reduction-strategy.jsonl`
 

@@ -67,3 +67,21 @@ Use `reduction_sum` to study reduction strategy tradeoffs:
 2. keep block size, shape, dtype, and device fixed
 3. inspect whether extra partial reads/writes change effective bandwidth
 4. profile the faster strategy to confirm occupancy and memory behavior
+
+## Next Fusion Track
+
+Use `swiglu` to study elementwise fusion without reduction complexity:
+
+1. compare PyTorch against the fused Triton kernel
+2. keep rows, columns, dtype, and block size fixed
+3. inspect whether removing intermediate activation tensors improves effective bandwidth
+4. profile the fused kernel before moving into matmul tiling
+
+## Matmul Progression Track
+
+Use `matmul` to move from memory-dominated kernels into reuse and tile shape:
+
+1. compare PyTorch against the tiled Triton `tl.dot` implementation
+2. sweep block M/N/K only after the baseline shape is stable
+3. separate p50 latency from achieved TFLOP/s and tail noise
+4. use Nsight Compute to confirm occupancy, registers, shared memory, and Tensor Core utilization

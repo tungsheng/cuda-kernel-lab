@@ -24,6 +24,8 @@ later validate or refine them.
 | softmax fused | read row, write row | reductions, exp, divide | memory traffic plus transcendental/reduction cost |
 | RMSNorm fused | read x and weight, write out | row reduction plus scale | memory traffic plus row reduction |
 | LayerNorm fused | read x, weight, bias, write out | two row reductions plus affine | memory traffic plus row reduction |
+| SwiGLU fused | read gate and up, write out | sigmoid and multiplies | memory traffic plus transcendental cost |
+| matmul | read A and B, write C | 2 * M * N * K | compute throughput when tile reuse is effective |
 
 Normalization traffic intentionally counts the affine parameter vector as if it
 is read for every row. Real cache behavior can be better, so profiler notes

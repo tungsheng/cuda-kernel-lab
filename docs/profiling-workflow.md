@@ -27,6 +27,8 @@ First profiler targets:
 ```bash
 ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/memory-profiled.jsonl
 ncu --set full --target-processes all uv run benchmark-softmax --backend triton --device cuda --rows 4096 --cols 1024 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/softmax-profiled.jsonl
+ncu --set full --target-processes all uv run benchmark-swiglu --backend triton --device cuda --rows 4096 --cols 4096 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/swiglu-profiled.jsonl
+ncu --set full --target-processes all uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --output experiments/results/aws-ec2-first-run-profiled/matmul-profiled.jsonl
 ```
 
 Large binary captures are ignored by default. Commit compact text summaries in

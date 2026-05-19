@@ -272,6 +272,8 @@ def _variant_label(run: dict[str, Any]) -> str:
         "memory_bandwidth": ("block_size",),
         "softmax": ("traffic_model",),
         "norms": ("eps",),
+        "swiglu": ("block_size",),
+        "matmul": ("block_m", "block_n", "block_k"),
     }
     fields = []
     for key in strategy_fields.get(str(run.get("benchmark")), ()):

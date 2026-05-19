@@ -12,6 +12,10 @@ DEFAULT_OUTPUT_DIR = Path("experiments/results/aws-ec2-first-run")
 DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
 DEFAULT_MEMORY_BLOCK_SIZE = 1024
+DEFAULT_SWIGLU_BLOCK_SIZE = 1024
+DEFAULT_MATMUL_BLOCK_M = 16
+DEFAULT_MATMUL_BLOCK_N = 16
+DEFAULT_MATMUL_BLOCK_K = 32
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
 DEFAULT_REDUCTION_STRATEGY = "iterative"
 DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
@@ -39,6 +43,11 @@ def build_matrix(
     warmup: int = DEFAULT_WARMUP,
     iterations: int = DEFAULT_ITERATIONS,
     memory_block_size: int = DEFAULT_MEMORY_BLOCK_SIZE,
+    swiglu_block_size: int = DEFAULT_SWIGLU_BLOCK_SIZE,
+    include_matmul: bool = False,
+    matmul_block_m: int = DEFAULT_MATMUL_BLOCK_M,
+    matmul_block_n: int = DEFAULT_MATMUL_BLOCK_N,
+    matmul_block_k: int = DEFAULT_MATMUL_BLOCK_K,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -53,6 +62,10 @@ def build_matrix(
         raise ValueError("iterations must be positive")
     if memory_block_size <= 0:
         raise ValueError("memory_block_size must be positive")
+    if swiglu_block_size <= 0:
+        raise ValueError("swiglu_block_size must be positive")
+    if matmul_block_m <= 0 or matmul_block_n <= 0 or matmul_block_k <= 0:
+        raise ValueError("matmul block sizes must be positive")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
     if reduction_strategy not in REDUCTION_STRATEGIES:
@@ -149,6 +162,71 @@ def build_matrix(
                 ),
             )
         )
+        commands.append(
+            MatrixCommand(
+                primitive="swiglu",
+                dtype=dtype,
+                command=(
+                    "uv",
+                    "run",
+                    "benchmark-swiglu",
+                    "--backend",
+                    "all",
+                    "--device",
+                    device,
+                    "--rows",
+                    "4096",
+                    "--cols",
+                    "4096",
+                    "--dtype",
+                    dtype,
+                    "--block-size",
+                    str(swiglu_block_size),
+                    "--warmup",
+                    str(warmup),
+                    "--iterations",
+                    str(iterations),
+                    "--output",
+                    str(output_dir / "swiglu.jsonl"),
+                ),
+            )
+        )
+        if include_matmul:
+            commands.append(
+                MatrixCommand(
+                    primitive="matmul",
+                    dtype=dtype,
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-matmul",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--m",
+                        "1024",
+                        "--n",
+                        "1024",
+                        "--k",
+                        "1024",
+                        "--dtype",
+                        dtype,
+                        "--block-m",
+                        str(matmul_block_m),
+                        "--block-n",
+                        str(matmul_block_n),
+                        "--block-k",
+                        str(matmul_block_k),
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "matmul.jsonl"),
+                    ),
+                )
+            )
 
     if include_vector_add_sweep:
         for block_size in _extra_vector_add_block_sizes(
@@ -254,6 +332,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Triton block size passed to benchmark-memory commands.",
     )
     parser.add_argument(
+        "--swiglu-block-size",
+        type=int,
+        default=DEFAULT_SWIGLU_BLOCK_SIZE,
+        help="Triton block size passed to benchmark-swiglu commands.",
+    )
+    parser.add_argument(
+        "--include-matmul",
+        action="store_true",
+        help="Add the first tiled matmul benchmark commands.",
+    )
+    parser.add_argument("--matmul-block-m", type=int, default=DEFAULT_MATMUL_BLOCK_M)
+    parser.add_argument("--matmul-block-n", type=int, default=DEFAULT_MATMUL_BLOCK_N)
+    parser.add_argument("--matmul-block-k", type=int, default=DEFAULT_MATMUL_BLOCK_K)
+    parser.add_argument(
         "--reduction-strategy",
         choices=REDUCTION_STRATEGIES,
         default=DEFAULT_REDUCTION_STRATEGY,
@@ -290,6 +382,11 @@ def main(argv: list[str] | None = None) -> None:
         warmup=args.warmup,
         iterations=args.iterations,
         memory_block_size=args.memory_block_size,
+        swiglu_block_size=args.swiglu_block_size,
+        include_matmul=args.include_matmul,
+        matmul_block_m=args.matmul_block_m,
+        matmul_block_n=args.matmul_block_n,
+        matmul_block_k=args.matmul_block_k,
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,

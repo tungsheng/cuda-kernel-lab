@@ -19,8 +19,10 @@ dependencies = [
 [project.scripts]
 gpu-info = "cuda_kernel_lab.gpu_info:main"
 benchmark-memory = "cuda_kernel_lab.benchmarks.memory_bandwidth:main"
+benchmark-matmul = "cuda_kernel_lab.benchmarks.matmul:main"
 benchmark-softmax = "cuda_kernel_lab.benchmarks.softmax:main"
 benchmark-norms = "cuda_kernel_lab.benchmarks.norms:main"
+benchmark-swiglu = "cuda_kernel_lab.benchmarks.swiglu:main"
 benchmark-matrix = "cuda_kernel_lab.benchmark_matrix:main"
 benchmark-report = "cuda_kernel_lab.benchmark_report:main"
 nsight-summary = "cuda_kernel_lab.nsight_summary:main"

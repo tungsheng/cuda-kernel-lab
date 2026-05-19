@@ -10,14 +10,16 @@ from cuda_kernel_lab import benchmark_matrix
 def test_default_matrix_covers_expected_primitives_and_dtypes() -> None:
     entries = benchmark_matrix.build_matrix()
 
-    assert len(entries) == 6
+    assert len(entries) == 8
     assert [(entry.primitive, entry.dtype) for entry in entries] == [
         ("memory", "float32"),
         ("softmax", "float32"),
         ("norms", "float32"),
+        ("swiglu", "float32"),
         ("memory", "float16"),
         ("softmax", "float16"),
         ("norms", "float16"),
+        ("swiglu", "float16"),
     ]
 
 
@@ -44,6 +46,11 @@ def test_matrix_commands_include_shapes_and_output_paths() -> None:
         "uv run benchmark-norms --backend all --device cuda --op all --rows 4096 "
         "--cols 4096 --dtype float16 --warmup 7 --iterations 11 --output results/norms.jsonl"
     ) in command_lines
+    assert (
+        "uv run benchmark-swiglu --backend all --device cuda --rows 4096 --cols 4096 "
+        "--dtype float16 --block-size 1024 --warmup 7 --iterations 11 "
+        "--output results/swiglu.jsonl"
+    ) in command_lines
 
 
 def test_matrix_can_include_vector_add_strategy_sweep() -> None:
@@ -54,7 +61,7 @@ def test_matrix_can_include_vector_add_strategy_sweep() -> None:
     )
     command_lines = [entry.shell_line() for entry in entries]
 
-    assert len(entries) == 8
+    assert len(entries) == 10
     assert (
         "uv run benchmark-memory --backend all --device cuda --op vector_add "
         "--numel 16777216 --dtype float32 --block-size 512 --reduction-strategy iterative "
@@ -74,7 +81,7 @@ def test_matrix_sweep_does_not_repeat_baseline_block_size() -> None:
     command_lines = [entry.shell_line() for entry in entries]
     sweep_lines = [line for line in command_lines if "vector-add-block-size.jsonl" in line]
 
-    assert len(entries) == 8
+    assert len(entries) == 10
     assert len(sweep_lines) == 2
     assert all("--block-size 1024" not in line for line in sweep_lines)
 
@@ -87,11 +94,34 @@ def test_matrix_can_include_reduction_strategy_sweep() -> None:
     )
     command_lines = [entry.shell_line() for entry in entries]
 
-    assert len(entries) == 7
+    assert len(entries) == 9
     assert (
         "uv run benchmark-memory --backend all --device cuda --op reduction_sum "
         "--numel 16777216 --dtype float32 --block-size 1024 --reduction-strategy two_pass "
         "--warmup 25 --iterations 100 --output results/reduction-strategy.jsonl"
+    ) in command_lines
+
+
+def test_matrix_can_include_matmul_progression() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_matmul=True,
+        matmul_block_m=32,
+        matmul_block_n=16,
+        matmul_block_k=64,
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert len(entries) == 10
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024 "
+        "--dtype float32 --block-m 32 --block-n 16 --block-k 64 "
+        "--warmup 25 --iterations 100 --output results/matmul.jsonl"
+    ) in command_lines
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024 "
+        "--dtype float16 --block-m 32 --block-n 16 --block-k 64 "
+        "--warmup 25 --iterations 100 --output results/matmul.jsonl"
     ) in command_lines
 
 
@@ -110,7 +140,9 @@ def test_dry_run_prints_without_executing(
     assert "uv run benchmark-memory" in output
     assert "uv run benchmark-softmax" in output
     assert "uv run benchmark-norms" in output
+    assert "uv run benchmark-swiglu" in output
     assert "results/memory.jsonl" in output
+    assert "results/swiglu.jsonl" in output
 
 
 def test_matrix_rejects_invalid_timing_values() -> None:
@@ -122,6 +154,12 @@ def test_matrix_rejects_invalid_timing_values() -> None:
 
     with pytest.raises(ValueError, match="memory_block_size"):
         benchmark_matrix.build_matrix(memory_block_size=0)
+
+    with pytest.raises(ValueError, match="swiglu_block_size"):
+        benchmark_matrix.build_matrix(swiglu_block_size=0)
+
+    with pytest.raises(ValueError, match="matmul block sizes"):
+        benchmark_matrix.build_matrix(matmul_block_m=0)
 
     with pytest.raises(ValueError, match="vector_add_sweep_block_sizes"):
         benchmark_matrix.build_matrix(vector_add_sweep_block_sizes=(512, 0))
@@ -144,6 +182,7 @@ def test_matrix_parses_vector_add_sweep_block_sizes(
             "--include-reduction-sweep",
             "--reduction-sweep-strategies",
             "iterative,two_pass",
+            "--include-matmul",
         ]
     )
 
@@ -153,3 +192,5 @@ def test_matrix_parses_vector_add_sweep_block_sizes(
     assert "results/vector-add-block-size.jsonl" in output
     assert "--reduction-strategy two_pass" in output
     assert "results/reduction-strategy.jsonl" in output
+    assert "uv run benchmark-matmul" in output
+    assert "results/matmul.jsonl" in output

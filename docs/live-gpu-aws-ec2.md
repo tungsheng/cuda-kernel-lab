@@ -73,6 +73,9 @@ uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
+Add `--include-matmul` when collecting the first tiled matmul progression in
+the same session.
+
 Terminate the instance and remove the temporary security group:
 
 ```bash
@@ -153,6 +156,8 @@ Start with one memory primitive and one fused kernel:
 ```bash
 ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/memory-profiled.jsonl
 ncu --set full --target-processes all uv run benchmark-softmax --backend triton --device cuda --rows 4096 --cols 1024 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/softmax-profiled.jsonl
+ncu --set full --target-processes all uv run benchmark-swiglu --backend triton --device cuda --rows 4096 --cols 4096 --dtype float32 --output experiments/results/aws-ec2-first-run-profiled/swiglu-profiled.jsonl
+ncu --set full --target-processes all uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --output experiments/results/aws-ec2-first-run-profiled/matmul-profiled.jsonl
 ```
 
 Save compact profiler notes under `profiling/reports/`.

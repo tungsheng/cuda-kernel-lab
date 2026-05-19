@@ -43,6 +43,18 @@ Normalization:
 uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
 ```
 
+SwiGLU:
+
+```bash
+uv run benchmark-swiglu --backend all --device cuda --rows 4096 --cols 4096
+```
+
+Matmul:
+
+```bash
+uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024
+```
+
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
 
@@ -60,7 +72,7 @@ Then run it on the CUDA host:
 uv run benchmark-matrix
 ```
 
-The default matrix runs memory, softmax, and normalization benchmarks for
+The default matrix runs memory, softmax, normalization, and SwiGLU benchmarks for
 `float32` and `float16`, writing JSONL records under
 `experiments/results/aws-ec2-first-run/`.
 
@@ -82,6 +94,9 @@ uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --d
 uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
+
+Add `--include-matmul` when you want the first tiled matmul progression numbers
+in the same run directory.
 
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
