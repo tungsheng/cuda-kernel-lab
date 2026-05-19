@@ -7,5 +7,5 @@ Each kernel should include:
 
 - a correctness test against the PyTorch baseline
 - a benchmark entry
-- a backend-neutral memory traffic and FLOP estimate under `inference_kernel_lab.ops`
+- a backend-neutral memory traffic and FLOP estimate under `cuda_kernel_lab.ops`
 - profiler notes once inspected with Nsight Compute or Nsight Systems

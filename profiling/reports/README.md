@@ -3,17 +3,12 @@
 Commit short profiler writeups here. Use [TEMPLATE.md](TEMPLATE.md) for new
 reports.
 
-Each report should include:
+Each report should answer:
 
-- hardware and driver context
-- command used
-- JSONL result path or pasted result record when available
-- kernel name and input shape
-- latency summary
-- raw latency distribution notes when p95/p99 look noisy
-- memory throughput summary
-- occupancy or launch configuration notes
-- interpretation: memory-bound or compute-bound
+- What command and result are being explained?
+- Which profiler counters matter?
+- Is the kernel memory-bound or compute-bound?
+- Did the counters confirm the benchmark interpretation?
 
 Suggested filename:
 

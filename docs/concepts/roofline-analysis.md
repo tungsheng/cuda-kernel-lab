@@ -8,6 +8,7 @@ arithmetic intensity = FLOPs / bytes moved from high bandwidth memory
 
 Low arithmetic intensity kernels are usually memory-bound. High arithmetic
 intensity kernels may become compute-bound when data reuse is strong enough.
+Use the roofline model to choose an optimization strategy before tuning blindly.
 
 ## Accounting Models
 
@@ -28,46 +29,16 @@ Normalization traffic intentionally counts the affine parameter vector as if it
 is read for every row. Real cache behavior can be better, so profiler notes
 should record whether parameter loads are visible for the tested shape.
 
-## Benchmark Discipline
+## Reporting Fields
 
-Each benchmark should report:
+Use the benchmark workflow for commands and JSONL output. When summarizing a
+roofline result, keep these fields together:
 
 - shape, dtype, backend, and device
 - p50, p95, and p99 latency
 - estimated bytes moved and effective GB/s
 - estimated FLOPs and effective TFLOP/s
 - command and run metadata when the result is worth keeping
-
-Append durable JSONL records with:
-
-```bash
-uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
-```
-
-The JSONL record includes command arguments, git state, host and package
-versions, visible CUDA devices, raw latencies, and derived metrics.
-
-## First Comparisons
-
-Memory primitives:
-
-```bash
-uv sync --group dev --extra gpu
-uv run gpu-info
-uv run benchmark-memory --backend all --device cuda --op all
-```
-
-Softmax:
-
-```bash
-uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
-```
-
-Normalization:
-
-```bash
-uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
-```
 
 For FP16/BF16 normalization runs, include the epsilon value and correctness
 tolerance in the report. Normalization kernels can look fast while still being

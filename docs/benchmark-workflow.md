@@ -1,7 +1,11 @@
 # Benchmark Workflow
 
 Benchmarks answer one question at a time: how fast did this backend run this
-primitive for this shape and dtype?
+primitive for this shape and dtype, and which optimization strategy explains the
+result?
+
+You do not need a live AWS cluster. A single Linux CUDA host is enough for the
+kernel microbenchmarks in this repo.
 
 ## Local Checks
 

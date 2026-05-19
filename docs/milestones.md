@@ -1,37 +1,31 @@
 # Milestones
 
-The project moves from isolated primitives toward decode-time serving behavior.
+The project moves from simple memory traffic toward increasingly realistic CUDA
+optimization strategies. LLM-shaped primitives provide useful workloads, but
+the lesson is always the optimization strategy and the benchmark evidence.
 
 | Milestone | Focus | Status |
 | --- | --- | --- |
-| 0 | setup, tests, benchmark discipline, GPU info | implemented |
-| 1 | copy, scale, vector add, reduction sum | implemented |
-| 2 | fused row-wise softmax | implemented |
-| 3 | RMSNorm and LayerNorm forward kernels | implemented |
-| 4 | SwiGLU elementwise fusion | planned |
-| 5 | matmul progression and tiling | planned |
-| 6 | contiguous and paged KV cache layout | planned |
-| 7 | decode attention microkernel | planned |
-| 8 | mini inference scheduler simulator | planned |
-| 9 | integration demo with dashboard/report | planned |
+| 0 | benchmark discipline, device info, result metadata | implemented |
+| 1 | memory bandwidth primitives | implemented |
+| 2 | reduction strategies | started |
+| 3 | softmax fusion | implemented |
+| 4 | normalization fusion | implemented |
+| 5 | SwiGLU elementwise fusion | planned |
+| 6 | matmul tiling progression | planned |
+| 7 | Tensor Core matmul | planned |
+| 8 | attention microkernel optimization | planned |
+| 9 | final strategy comparison report | planned |
 
 ## Success Criteria
 
-The code and notes should make it easy to explain:
+Each milestone should leave behind enough code and notes to explain:
 
-- why decode is memory-bound
-- why kernel fusion helps
-- why tiled matmul improves reuse
-- why KV cache layout affects serving throughput
-- why faster kernels do not automatically solve tail latency
+- why a primitive is memory-bound or compute-bound
+- which optimization strategy changed the bottleneck
+- how much latency, bandwidth, or throughput moved
+- whether profiler counters confirm the benchmark interpretation
+- what strategy should be tried next
 
-## Milestone Note Checklist
-
-For each milestone, record:
-
-- question or bottleneck
-- implemented backends
-- benchmark commands
-- result summary
-- profiler observations when available
-- next question
+Use [Optimization Strategies](optimization-strategies.md) for the comparison
+pattern.

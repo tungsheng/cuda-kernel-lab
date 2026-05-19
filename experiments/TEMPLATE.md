@@ -4,6 +4,10 @@
 
 What are you trying to learn?
 
+## Optimization Strategy
+
+Which strategy is being tested?
+
 ## Command
 
 ```bash
@@ -37,13 +41,21 @@ What are you trying to learn?
 - GB/s:
 - TFLOP/s:
 
+## Profiler Notes
+
+Only fill this in when profiler data was collected. Use
+`profiling/reports/TEMPLATE.md` for a full profiler writeup.
+
+- Key counters:
+- Confirmation or surprise:
+
 ## Observation
 
 What happened?
 
 ## Interpretation
 
-Why does it look that way?
+Why does it look that way? Did the strategy explain the metric change?
 
 ## Next Question
 

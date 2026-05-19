@@ -1,32 +1,32 @@
 # Documentation
 
-Use the root README to get running. Use these docs to understand what to
-measure, how to save results, and how to turn runs into conclusions.
+Use the root README to get running. Use these docs when you need the method,
+context, or reporting shape behind a benchmark.
 
-## Workflows
+## Start Here
 
-- [Benchmark Workflow](benchmark-workflow.md): run benchmarks locally or on CUDA
-  hosts and save JSONL results.
-- [Interpreting Results](interpreting-results.md): read latency, bandwidth,
-  FLOP, and traffic-model numbers.
-- [Profiling Workflow](profiling-workflow.md): collect compact Nsight notes and
-  profiler summaries.
+- [Benchmark Workflow](benchmark-workflow.md): run benchmarks and save JSONL
+  records.
+- [Interpreting Results](interpreting-results.md): read latency, bandwidth, and
+  traffic-model columns.
+- [Optimization Strategies](optimization-strategies.md): compare a baseline to
+  a kernel change with evidence.
+- [Profiling Workflow](profiling-workflow.md): validate benchmark conclusions
+  with compact profiler notes.
 - [Milestones](milestones.md): project roadmap and current implementation status.
 
-## Concepts
+## Concept Notes
 
 - [GPU Execution Model](concepts/gpu-execution-model.md)
 - [Roofline Analysis](concepts/roofline-analysis.md)
 - [Memory Hierarchy](concepts/memory-hierarchy.md)
 - [Kernel Fusion](concepts/kernel-fusion.md)
+- [Occupancy and Registers](concepts/occupancy-registers.md)
+- [Tensor Cores](concepts/tensor-cores.md)
 - [KV Cache Layout](concepts/kv-cache-layout.md)
-- [Inference System Lessons](concepts/inference-system-lessons.md)
+- [Kernel/System Boundary](concepts/kernel-system-boundary.md)
 
-## Documentation Rule
+## Rule Of Thumb
 
-Keep docs simple:
-
-- root README explains how to run the project
-- workflow docs explain how to do repeatable work
-- concept docs explain why a result matters
-- experiment and profiling templates keep raw observations consistent
+Keep commands in workflow docs, interpretation in concept docs, and raw
+observations in experiment or profiling notes.

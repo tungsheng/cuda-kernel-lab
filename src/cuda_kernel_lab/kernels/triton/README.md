@@ -15,20 +15,5 @@ Planned order:
 3. Paged KV lookup
 4. Decode attention microkernel
 
-Run the memory primitive comparison on a CUDA host:
-
-```bash
-uv run benchmark-memory --backend all --device cuda --op all
-```
-
-Run the softmax comparison on a CUDA host:
-
-```bash
-uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
-```
-
-Run the normalization comparison on a CUDA host:
-
-```bash
-uv run benchmark-norms --backend all --device cuda --op all
-```
+Use `--backend triton` in the benchmark commands when you want to isolate these
+implementations from PyTorch baselines.

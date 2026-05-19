@@ -51,9 +51,3 @@ Precision notes:
 - outputs are stored back to the input dtype
 - FP16/BF16 tests should use looser tolerances than FP32
 - epsilon values are part of the numerical contract and should be reported
-
-Run on a CUDA host:
-
-```bash
-uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4096
-```

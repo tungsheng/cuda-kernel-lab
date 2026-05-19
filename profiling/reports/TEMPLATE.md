@@ -10,6 +10,7 @@ One sentence with the conclusion.
 - JSONL result:
 - Operation:
 - Backend:
+- Optimization strategy:
 - Shape:
 - Dtype:
 - Device:
@@ -23,18 +24,21 @@ One sentence with the conclusion.
 
 ## Key Metrics
 
+Record only counters that affect the conclusion.
+
 - Latency:
 - Memory throughput:
 - Global load/store behavior:
 - Occupancy:
 - Registers:
 - Shared memory:
+- Tensor Core utilization:
 - Cache notes:
 
 ## Interpretation
 
 Is the kernel memory-bound or compute-bound? Did profiler counters confirm the
-benchmark traffic model?
+benchmark traffic model and the optimization strategy?
 
 ## Follow-Up
 

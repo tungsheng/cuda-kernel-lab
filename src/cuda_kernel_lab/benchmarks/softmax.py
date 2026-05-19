@@ -6,8 +6,8 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from inference_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
-from inference_kernel_lab.benchmark_cli import (
+from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
+from cuda_kernel_lab.benchmark_cli import (
     add_common_benchmark_args,
     dtype_label,
     emit_results,
@@ -18,8 +18,8 @@ from inference_kernel_lab.benchmark_cli import (
     resolve_dtype,
     selected_backends,
 )
-from inference_kernel_lab.metrics import dtype_size_bytes
-from inference_kernel_lab.ops.softmax import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.metrics import dtype_size_bytes
+from cuda_kernel_lab.ops.softmax import flop_count, memory_traffic_bytes
 
 TRAFFIC_MODELS = ("fused", "naive")
 
@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
 
 def triton_is_available() -> bool:
     try:
-        from inference_kernel_lab.kernels.triton.softmax import is_available
+        from cuda_kernel_lab.kernels.triton.softmax import is_available
     except ImportError:
         return False
     return is_available()
@@ -107,12 +107,12 @@ def run_one(
 
 def build_op(backend: str, x: Any, out: Any | None) -> Callable[[], Any]:
     if backend == "torch":
-        from inference_kernel_lab.kernels.torch_baselines import softmax
+        from cuda_kernel_lab.kernels.torch_baselines import softmax
 
         return lambda: softmax(x)
 
     if backend == "triton":
-        from inference_kernel_lab.kernels.triton import softmax
+        from cuda_kernel_lab.kernels.triton import softmax
 
         return lambda: softmax(x, out=out)
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "inference-kernel-lab"
+name = "cuda-kernel-lab"
 version = "0.1.0"
-description = "GPU kernel engineering lab for LLM inference primitives."
+description = "CUDA kernel optimization strategy lab with reproducible GPU benchmarks."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -17,10 +17,10 @@ dependencies = [
 ]
 
 [project.scripts]
-gpu-info = "inference_kernel_lab.gpu_info:main"
-benchmark-memory = "inference_kernel_lab.benchmarks.memory_bandwidth:main"
-benchmark-softmax = "inference_kernel_lab.benchmarks.softmax:main"
-benchmark-norms = "inference_kernel_lab.benchmarks.norms:main"
+gpu-info = "cuda_kernel_lab.gpu_info:main"
+benchmark-memory = "cuda_kernel_lab.benchmarks.memory_bandwidth:main"
+benchmark-softmax = "cuda_kernel_lab.benchmarks.softmax:main"
+benchmark-norms = "cuda_kernel_lab.benchmarks.norms:main"
 
 [project.optional-dependencies]
 gpu = [
@@ -40,7 +40,7 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 include = [
-  "inference_kernel_lab*",
+  "cuda_kernel_lab*",
 ]
 
 [tool.pytest.ini_options]

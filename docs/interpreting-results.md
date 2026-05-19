@@ -5,7 +5,7 @@ a lower latency.
 
 ## Columns
 
-- `p50_ms`: typical latency.
+- `p50_ms`: median latency.
 - `p95_ms` and `p99_ms`: tail latency and run stability.
 - `GB/s`: estimated bytes moved divided by p50 latency.
 - `TFLOP/s`: estimated FLOPs divided by p50 latency.
@@ -21,7 +21,8 @@ Ask these in order:
 3. Is the primitive low arithmetic intensity?
 4. Does GB/s explain the result better than TFLOP/s?
 5. Did fusion remove reads or writes?
-6. Do profiler counters support the analytical traffic model?
+6. Which optimization strategy changed the metric?
+7. Do profiler counters support the analytical traffic model?
 
 ## Common Mistakes
 
@@ -43,6 +44,6 @@ Backend comparison:
 Best p50:
 Tail behavior:
 Bandwidth interpretation:
-Profiler confirmation:
+Profiler confirmation, if collected:
 Conclusion:
 ```

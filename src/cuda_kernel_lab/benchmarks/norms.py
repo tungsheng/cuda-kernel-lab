@@ -6,8 +6,8 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from inference_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
-from inference_kernel_lab.benchmark_cli import (
+from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
+from cuda_kernel_lab.benchmark_cli import (
     add_common_benchmark_args,
     dtype_label,
     emit_results,
@@ -19,8 +19,8 @@ from inference_kernel_lab.benchmark_cli import (
     selected_backends,
     selected_ops,
 )
-from inference_kernel_lab.metrics import dtype_size_bytes
-from inference_kernel_lab.ops.norms import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.metrics import dtype_size_bytes
+from cuda_kernel_lab.ops.norms import flop_count, memory_traffic_bytes
 
 OPS = ("rmsnorm", "layernorm")
 
@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
 
 def triton_is_available() -> bool:
     try:
-        from inference_kernel_lab.kernels.triton.norms import is_available
+        from cuda_kernel_lab.kernels.triton.norms import is_available
     except ImportError:
         return False
     return is_available()
@@ -124,7 +124,7 @@ def build_op(
     effective_eps = default_eps(op_name) if eps is None else eps
 
     if backend == "torch":
-        from inference_kernel_lab.kernels.torch_baselines import layernorm, rmsnorm
+        from cuda_kernel_lab.kernels.torch_baselines import layernorm, rmsnorm
 
         if op_name == "rmsnorm":
             return lambda: rmsnorm(x, weight, eps=effective_eps)
@@ -132,7 +132,7 @@ def build_op(
             return lambda: layernorm(x, weight, bias, eps=effective_eps)
 
     if backend == "triton":
-        from inference_kernel_lab.kernels.triton import layernorm, rmsnorm
+        from cuda_kernel_lab.kernels.triton import layernorm, rmsnorm
 
         if op_name == "rmsnorm":
             return lambda: rmsnorm(x, weight, eps=effective_eps, out=out)

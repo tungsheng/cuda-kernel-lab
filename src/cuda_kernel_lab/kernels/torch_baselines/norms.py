@@ -1,4 +1,4 @@
-"""PyTorch baselines for inference-time normalization kernels."""
+"""PyTorch baselines for row-wise normalization kernels."""
 
 from __future__ import annotations
 

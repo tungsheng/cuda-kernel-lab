@@ -30,27 +30,20 @@ round trips through high bandwidth memory.
 | naive two-kernel softmax | input + intermediate | intermediate + output | 4 tensors |
 | fused row-wise softmax | input | output | 2 tensors |
 
-The Triton implementation performs the row max, exponential, row sum, and final
+The Triton softmax performs the row max, exponential, row sum, and final
 normalization in one program per row:
 
 ```text
 load row -> subtract max -> exp -> reduce sum -> normalize -> store row
 ```
 
-Run the comparison on a CUDA host:
-
-```bash
-uv run benchmark-softmax --backend all --device cuda --rows 4096 --cols 1024
-```
-
-The default benchmark traffic model is `fused`, which reports the idealized
-lower-bound HBM movement for PyTorch and Triton. To see the memory traffic a
-naive implementation would pay, rerun with:
+Run the standard comparison from the benchmark workflow. The default softmax
+traffic model is `fused`, which reports idealized HBM movement for both PyTorch
+and Triton. To show the traffic a naive two-kernel implementation would pay,
+rerun with:
 
 ```bash
 uv run benchmark-softmax --backend triton --device cuda --traffic-model naive
 ```
 
-That second command does not make the Triton kernel naive; it changes the
-denominator used for the GB/s estimate so the cost of the avoided intermediate
-tensor is explicit.
+That flag changes only the GB/s denominator. It does not change the kernel.

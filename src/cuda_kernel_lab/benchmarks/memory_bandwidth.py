@@ -6,8 +6,8 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from inference_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
-from inference_kernel_lab.benchmark_cli import (
+from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
+from cuda_kernel_lab.benchmark_cli import (
     add_common_benchmark_args,
     dtype_label,
     emit_results,
@@ -19,8 +19,8 @@ from inference_kernel_lab.benchmark_cli import (
     selected_backends,
     selected_ops,
 )
-from inference_kernel_lab.metrics import dtype_size_bytes
-from inference_kernel_lab.ops.memory import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.metrics import dtype_size_bytes
+from cuda_kernel_lab.ops.memory import flop_count, memory_traffic_bytes
 
 OPS = ("copy", "scale", "vector_add", "reduction_sum")
 
@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
 
 def triton_is_available() -> bool:
     try:
-        from inference_kernel_lab.kernels.triton import memory
+        from cuda_kernel_lab.kernels.triton import memory
     except ImportError:
         return False
     return memory.is_available()
@@ -114,7 +114,7 @@ def build_op(
     out: Any | None,
 ) -> Callable[[], Any]:
     if backend == "torch":
-        from inference_kernel_lab.kernels.torch_baselines import memory
+        from cuda_kernel_lab.kernels.torch_baselines import memory
 
         if op_name == "copy":
             return lambda: memory.copy(x, out=out)
@@ -126,7 +126,7 @@ def build_op(
             return lambda: memory.reduction_sum(x)
 
     if backend == "triton":
-        from inference_kernel_lab.kernels.triton import memory
+        from cuda_kernel_lab.kernels.triton import memory
 
         if op_name == "copy":
             return lambda: memory.copy(x, out=out)

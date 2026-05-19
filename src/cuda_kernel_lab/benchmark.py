@@ -16,8 +16,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from inference_kernel_lab.device import collect_cuda_devices
-from inference_kernel_lab.metrics import percentile
+from cuda_kernel_lab.device import collect_cuda_devices
+from cuda_kernel_lab.metrics import percentile
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from inference_kernel_lab.metrics import percentile
+from cuda_kernel_lab.metrics import percentile
 
 
 def test_percentile_interpolates() -> None:

@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from inference_kernel_lab.benchmark import (
+from cuda_kernel_lab.benchmark import (
     BenchmarkResult,
     benchmark_records,
     collect_run_metadata,

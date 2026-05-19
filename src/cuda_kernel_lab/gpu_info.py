@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from inference_kernel_lab.device import collect_cuda_devices
+from cuda_kernel_lab.device import collect_cuda_devices
 
 
 def main() -> None:

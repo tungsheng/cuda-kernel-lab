@@ -1,4 +1,4 @@
-"""Accounting models for inference-time normalization primitives."""
+"""Accounting models for row-wise normalization primitives."""
 
 from __future__ import annotations
 

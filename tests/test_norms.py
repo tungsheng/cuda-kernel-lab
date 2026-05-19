@@ -7,12 +7,12 @@ try:
 except ImportError:
     torch = None
 
-from inference_kernel_lab.kernels.torch_baselines import layernorm as torch_layernorm
-from inference_kernel_lab.kernels.torch_baselines import rmsnorm as torch_rmsnorm
-from inference_kernel_lab.kernels.triton.norms import is_available as triton_is_available
-from inference_kernel_lab.kernels.triton.norms import layernorm as triton_layernorm
-from inference_kernel_lab.kernels.triton.norms import rmsnorm as triton_rmsnorm
-from inference_kernel_lab.ops.norms import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.kernels.torch_baselines import layernorm as torch_layernorm
+from cuda_kernel_lab.kernels.torch_baselines import rmsnorm as torch_rmsnorm
+from cuda_kernel_lab.kernels.triton.norms import is_available as triton_is_available
+from cuda_kernel_lab.kernels.triton.norms import layernorm as triton_layernorm
+from cuda_kernel_lab.kernels.triton.norms import rmsnorm as triton_rmsnorm
+from cuda_kernel_lab.ops.norms import flop_count, memory_traffic_bytes
 
 requires_torch = pytest.mark.skipif(torch is None, reason="torch is not installed")
 

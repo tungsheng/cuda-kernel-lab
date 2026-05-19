@@ -1,7 +1,8 @@
 # KV Cache Layout
 
-KV cache layout is both a kernel concern and a serving-system memory management
-concern.
+KV cache layout is included here as a kernel-layout case study: the useful
+question is how addressing, memory access, and layout affect kernel behavior.
+End-to-end serving and scheduler experiments belong in `gpu-inference-lab`.
 
 ## Layouts
 
@@ -26,10 +27,10 @@ Record for each experiment:
 - sequence length distribution
 - allocated versus live tokens
 - lookup cost and fragmentation
-- impact on active batch size or memory headroom
+- memory headroom and allocation waste
 
 ## Core Lesson
 
-Paged KV cache is not just a data structure. It lets an inference server pack
-variable-length active sequences into GPU memory more flexibly, which can improve
-batching and throughput under real request mixes.
+Paged KV cache is not just a data structure. At the kernel level, it changes
+address calculation, memory coalescing, cache behavior, and the cost of lookup
+indirection.

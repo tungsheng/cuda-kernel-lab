@@ -1,7 +1,7 @@
-# Inference Kernel Lab
+# CUDA Kernel Lab
 
-Hands-on GPU kernel engineering lab for LLM inference primitives, benchmarks,
-and profiling.
+CUDA kernel optimization strategy lab with reproducible performance benchmarks
+on LLM-shaped primitives.
 
 ## Quick Start
 
@@ -48,7 +48,7 @@ uv run benchmark-memory --backend all --device cuda --op all --output experiment
 ## What Is Here
 
 ```text
-src/inference_kernel_lab/
+src/cuda_kernel_lab/
 ├── benchmarks/     # benchmark entry points
 ├── kernels/        # PyTorch, Triton, and CUDA kernel trees
 ├── ops/            # backend-neutral traffic and FLOP models
@@ -62,10 +62,16 @@ Current implemented kernels:
 - fused row-wise softmax
 - RMSNorm and LayerNorm forward kernels
 
+This repo focuses on kernel optimization strategy: memory coalescing,
+vectorization, reductions, fusion, launch tuning, profiler validation, and
+eventually Tensor Core matmul. Broader inference-system experiments belong in
+`gpu-inference-lab`.
+
 ## Read Next
 
 - [Docs map](docs/README.md)
 - [Benchmark workflow](docs/benchmark-workflow.md)
+- [Optimization strategies](docs/optimization-strategies.md)
 - [Interpreting results](docs/interpreting-results.md)
 - [Profiling workflow](docs/profiling-workflow.md)
 - [Milestones](docs/milestones.md)
