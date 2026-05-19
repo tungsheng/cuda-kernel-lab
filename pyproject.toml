@@ -21,6 +21,8 @@ gpu-info = "cuda_kernel_lab.gpu_info:main"
 benchmark-memory = "cuda_kernel_lab.benchmarks.memory_bandwidth:main"
 benchmark-softmax = "cuda_kernel_lab.benchmarks.softmax:main"
 benchmark-norms = "cuda_kernel_lab.benchmarks.norms:main"
+benchmark-matrix = "cuda_kernel_lab.benchmark_matrix:main"
+aws-ec2-live-gpu = "cuda_kernel_lab.aws_ec2_live_gpu:main"
 
 [project.optional-dependencies]
 gpu = [

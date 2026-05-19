@@ -31,6 +31,12 @@ Run the first benchmark:
 uv run benchmark-memory --backend all --op all --numel 16777216 --dtype float32
 ```
 
+Print the first live-GPU benchmark matrix:
+
+```bash
+uv run benchmark-matrix --dry-run
+```
+
 On a CUDA host, collect GPU numbers explicitly:
 
 ```bash
@@ -71,6 +77,7 @@ eventually Tensor Core matmul. Broader inference-system experiments belong in
 
 - [Docs map](docs/README.md)
 - [Benchmark workflow](docs/benchmark-workflow.md)
+- [AWS EC2 live GPU workflow](docs/live-gpu-aws-ec2.md)
 - [Optimization strategies](docs/optimization-strategies.md)
 - [Interpreting results](docs/interpreting-results.md)
 - [Profiling workflow](docs/profiling-workflow.md)

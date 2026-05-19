@@ -46,6 +46,24 @@ uv run benchmark-norms --backend all --device cuda --op all --rows 4096 --cols 4
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
 
+## Run The First Matrix
+
+For the first AWS EC2 evidence run, print the full matrix first:
+
+```bash
+uv run benchmark-matrix --dry-run
+```
+
+Then run it on the CUDA host:
+
+```bash
+uv run benchmark-matrix
+```
+
+The default matrix runs memory, softmax, and normalization benchmarks for
+`float32` and `float16`, writing JSONL records under
+`experiments/results/aws-ec2-first-run/`.
+
 ## Save Results
 
 Append JSONL records with `--output`:

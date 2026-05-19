@@ -7,6 +7,8 @@ context, or reporting shape behind a benchmark.
 
 - [Benchmark Workflow](benchmark-workflow.md): run benchmarks and save JSONL
   records.
+- [Live GPU On AWS EC2](live-gpu-aws-ec2.md): launch a disposable `g5.xlarge`
+  host in `us-west-2` for real CUDA measurements.
 - [Interpreting Results](interpreting-results.md): read latency, bandwidth, and
   traffic-model columns.
 - [Optimization Strategies](optimization-strategies.md): compare a baseline to

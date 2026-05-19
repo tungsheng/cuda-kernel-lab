@@ -9,6 +9,13 @@ Recommended result output:
 uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
 ```
 
+First live-GPU matrix:
+
+```bash
+uv run benchmark-matrix --dry-run
+uv run benchmark-matrix
+```
+
 The `experiments/results/` directory is ignored by default because JSONL runs
 can grow quickly. Use [TEMPLATE.md](TEMPLATE.md) for short experiment notes.
 Promote a compact summary into `profiling/reports/` or `docs/` when the result
