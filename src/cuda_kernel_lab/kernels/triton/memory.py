@@ -70,14 +70,28 @@ def scale(
     return out
 
 
-def reduction_sum(x: Any, *, block_size: int = DEFAULT_BLOCK_SIZE) -> Any:
-    """Return the sum of x using iterative Triton block reductions.
+def reduction_sum(
+    x: Any,
+    *,
+    block_size: int = DEFAULT_BLOCK_SIZE,
+    strategy: str = "iterative",
+) -> Any:
+    """Return the sum of x using a selected Triton reduction strategy.
 
     Partial sums accumulate in FP32 so low-precision inputs avoid the worst
     reduction-order error. The returned scalar is FP32.
     """
 
     _require_triton_tensor(x)
+    if strategy == "two_pass":
+        return _reduction_sum_two_pass(x, block_size=block_size)
+    if strategy != "iterative":
+        raise ValueError(f"unknown reduction strategy: {strategy}")
+
+    return _reduction_sum_iterative(x, block_size=block_size)
+
+
+def _reduction_sum_iterative(x: Any, *, block_size: int) -> Any:
     current = x
     current_numel = x.numel()
 
@@ -91,6 +105,17 @@ def reduction_sum(x: Any, *, block_size: int = DEFAULT_BLOCK_SIZE) -> Any:
     if current_numel == 0:
         return torch.zeros((), device=x.device, dtype=torch.float32)
     return current.reshape(())
+
+
+def _reduction_sum_two_pass(x: Any, *, block_size: int) -> Any:
+    current_numel = x.numel()
+    if current_numel == 0:
+        return torch.zeros((), device=x.device, dtype=torch.float32)
+
+    blocks = triton.cdiv(current_numel, block_size)
+    partials = torch.empty((blocks,), device=x.device, dtype=torch.float32)
+    _reduction_sum_kernel[(blocks,)](x, partials, current_numel, block_size)
+    return partials.sum()
 
 
 def _grid(numel: int, block_size: int) -> tuple[int]:

@@ -9,7 +9,7 @@ except ImportError:
 
 from cuda_kernel_lab.kernels.torch_baselines import memory as torch_memory
 from cuda_kernel_lab.kernels.triton import memory as triton_memory
-from cuda_kernel_lab.ops.memory import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.ops.memory import flop_count, memory_traffic_bytes, reduction_traffic_bytes
 
 requires_torch = pytest.mark.skipif(torch is None, reason="torch is not installed")
 
@@ -53,11 +53,17 @@ def test_scale_matches_torch(backend_name: str, backend: object) -> None:
 
 @requires_torch
 @pytest.mark.parametrize(("backend_name", "backend"), available_backends())
-def test_reduction_sum_matches_torch(backend_name: str, backend: object) -> None:
+@pytest.mark.parametrize("strategy", ["iterative", "two_pass"])
+def test_reduction_sum_matches_torch(
+    backend_name: str,
+    backend: object,
+    strategy: str,
+) -> None:
     device = "cuda" if backend_name == "triton" else "cpu"
     x = torch.randn(32, 16, device=device, dtype=torch.float32)
+    kwargs = {"strategy": strategy} if backend_name == "triton" else {}
 
-    torch.testing.assert_close(backend.reduction_sum(x), x.sum(), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(backend.reduction_sum(x, **kwargs), x.sum(), rtol=1e-5, atol=1e-5)
 
 
 def test_memory_traffic_estimates() -> None:
@@ -65,6 +71,10 @@ def test_memory_traffic_estimates() -> None:
     assert memory_traffic_bytes("copy", numel=10, dtype_size=4) == 80
     assert memory_traffic_bytes("scale", numel=10, dtype_size=4) == 80
     assert memory_traffic_bytes("reduction_sum", numel=10, dtype_size=4) == 44
+    assert (
+        reduction_traffic_bytes(numel=10, dtype_size=4, block_size=4, strategy="two_pass")
+        == 68
+    )
 
 
 def test_flop_estimates() -> None:

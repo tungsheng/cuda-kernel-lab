@@ -75,18 +75,20 @@ small sweeps into the same run directory when they belong to the same evidence
 note.
 
 For the first AWS EC2 evidence run, collect the baseline matrix and first
-`vector_add` strategy sweep in one disposable GPU session:
+strategy sweeps in one disposable GPU session:
 
 ```bash
-uv run benchmark-matrix --include-vector-add-sweep --dry-run
-uv run benchmark-matrix --include-vector-add-sweep
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
 runs, `512` and `2048`, to
-`experiments/results/aws-ec2-first-run/vector-add-block-size.jsonl`.
+`experiments/results/aws-ec2-first-run/vector-add-block-size.jsonl`. It also
+appends the first non-default `reduction_sum` strategy comparison to
+`experiments/results/aws-ec2-first-run/reduction-strategy.jsonl`.
 
 ## Save Results
 
@@ -104,6 +106,8 @@ Each record includes:
 - visible CUDA device metadata
 - raw latencies
 - p50, p95, p99, GB/s, and TFLOP/s
+- explicit strategy, variant, and parameter metadata
+- correctness check status and max error values against the PyTorch reference
 
 Keep large result files under `experiments/results/`. That directory is ignored
 by default.

@@ -54,7 +54,16 @@ Start with `vector_add` block-size tuning:
 
 1. run the AWS EC2 baseline matrix
 2. generate `experiments/aws-ec2-first-gpu-run.md` with `benchmark-report`
-3. run `benchmark-matrix --include-vector-add-sweep` to capture the first
-   PyTorch-vs-Triton `vector_add` block-size variants
+3. run `benchmark-matrix --include-vector-add-sweep --include-reduction-sweep`
+   to capture the first PyTorch-vs-Triton memory strategy variants
 4. profile the best candidate with Nsight Compute
 5. compare against the PyTorch and default Triton baseline
+
+## Second Variant Track
+
+Use `reduction_sum` to study reduction strategy tradeoffs:
+
+1. compare iterative Triton reduction against the two-pass variant
+2. keep block size, shape, dtype, and device fixed
+3. inspect whether extra partial reads/writes change effective bandwidth
+4. profile the faster strategy to confirm occupancy and memory behavior

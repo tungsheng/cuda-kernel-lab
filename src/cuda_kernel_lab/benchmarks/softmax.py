@@ -6,9 +6,10 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
+from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable, check_tensors_close
 from cuda_kernel_lab.benchmark_cli import (
     add_common_benchmark_args,
+    correctness_tolerance,
     dtype_label,
     emit_results,
     ensure_backend_available,
@@ -44,6 +45,7 @@ def main() -> None:
                 traffic_model=args.traffic_model,
                 warmup=args.warmup,
                 iterations=args.iterations,
+                skip_correctness=args.skip_correctness,
             )
         )
 
@@ -78,6 +80,7 @@ def run_one(
     traffic_model: str,
     warmup: int,
     iterations: int,
+    skip_correctness: bool,
 ) -> BenchmarkResult:
     if rows <= 0 or cols <= 0:
         raise ValueError("rows and cols must be positive")
@@ -85,6 +88,19 @@ def run_one(
     x = torch.randn((rows, cols), device=device, dtype=dtype)
     out = torch.empty_like(x) if backend == "triton" else None
     fn = build_op(backend, x, out)
+    correctness = None
+    if not skip_correctness:
+        expected = build_op("torch", x, None)()
+        actual = fn()
+        rtol, atol = correctness_tolerance(dtype)
+        correctness = check_tensors_close(
+            actual,
+            expected,
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+        )
+
     dtype_size = dtype_size_bytes(dtype)
 
     return benchmark_callable(
@@ -102,6 +118,10 @@ def run_one(
         flops=flop_count(rows=rows, cols=cols),
         warmup=warmup,
         iterations=iterations,
+        strategy="torch-baseline" if backend == "torch" else "triton-fused-row-softmax",
+        variant=f"traffic_model={traffic_model}",
+        parameters={"traffic_model": traffic_model},
+        correctness=correctness,
     )
 
 

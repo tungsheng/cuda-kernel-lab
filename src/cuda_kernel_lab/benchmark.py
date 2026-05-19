@@ -21,6 +21,32 @@ from cuda_kernel_lab.metrics import percentile
 
 
 @dataclass(frozen=True)
+class CorrectnessResult:
+    """Numerical agreement result for one benchmarked operation."""
+
+    checked: bool
+    passed: bool | None
+    reference_backend: str | None = None
+    max_abs_error: float | None = None
+    max_rel_error: float | None = None
+    atol: float | None = None
+    rtol: float | None = None
+    message: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "checked": self.checked,
+            "passed": self.passed,
+            "reference_backend": self.reference_backend,
+            "max_abs_error": self.max_abs_error,
+            "max_rel_error": self.max_rel_error,
+            "atol": self.atol,
+            "rtol": self.rtol,
+            "message": self.message,
+        }
+
+
+@dataclass(frozen=True)
 class BenchmarkResult:
     """Latency and derived throughput metrics for one benchmarked operation."""
 
@@ -31,6 +57,10 @@ class BenchmarkResult:
     latencies_ms: list[float]
     bytes_moved: int
     flops: int
+    strategy: str = "baseline"
+    variant: str = "default"
+    parameters: dict[str, Any] | None = None
+    correctness: CorrectnessResult | None = None
 
     @property
     def p50_ms(self) -> float:
@@ -68,6 +98,14 @@ class BenchmarkResult:
             "flops": self.flops,
             "tflops": self.tflops,
             "latencies_ms": self.latencies_ms,
+            "strategy": self.strategy,
+            "variant": self.variant,
+            "parameters": _jsonable(self.parameters or {}),
+            "correctness": (
+                self.correctness.as_dict()
+                if self.correctness is not None
+                else CorrectnessResult(checked=False, passed=None).as_dict()
+            ),
         }
 
 
@@ -167,6 +205,10 @@ def benchmark_callable(
     flops: int,
     warmup: int = 25,
     iterations: int = 100,
+    strategy: str = "baseline",
+    variant: str = "default",
+    parameters: dict[str, Any] | None = None,
+    correctness: CorrectnessResult | None = None,
 ) -> BenchmarkResult:
     """Benchmark a callable with CUDA events when available and wall time otherwise."""
 
@@ -207,6 +249,53 @@ def benchmark_callable(
         latencies_ms=latencies_ms,
         bytes_moved=bytes_moved,
         flops=flops,
+        strategy=strategy,
+        variant=variant,
+        parameters=parameters,
+        correctness=correctness,
+    )
+
+
+def check_tensors_close(
+    actual: Any,
+    expected: Any,
+    *,
+    torch: Any,
+    rtol: float,
+    atol: float,
+    reference_backend: str = "torch",
+) -> CorrectnessResult:
+    """Return numerical agreement metadata for tensor-like benchmark outputs."""
+
+    try:
+        actual_tensor = actual.detach()
+        expected_tensor = expected.detach().to(device=actual_tensor.device)
+        if expected_tensor.dtype != actual_tensor.dtype:
+            expected_tensor = expected_tensor.to(dtype=actual_tensor.dtype)
+
+        diff = (actual_tensor - expected_tensor).abs()
+        max_abs_error = float(diff.max().item()) if diff.numel() else 0.0
+        denominator = expected_tensor.abs().clamp_min(1e-12)
+        max_rel_error = float((diff / denominator).max().item()) if diff.numel() else 0.0
+        passed = bool(torch.allclose(actual_tensor, expected_tensor, rtol=rtol, atol=atol))
+    except Exception as exc:  # pragma: no cover - defensive metadata path
+        return CorrectnessResult(
+            checked=True,
+            passed=False,
+            reference_backend=reference_backend,
+            atol=atol,
+            rtol=rtol,
+            message=str(exc),
+        )
+
+    return CorrectnessResult(
+        checked=True,
+        passed=passed,
+        reference_backend=reference_backend,
+        max_abs_error=max_abs_error,
+        max_rel_error=max_rel_error,
+        atol=atol,
+        rtol=rtol,
     )
 
 

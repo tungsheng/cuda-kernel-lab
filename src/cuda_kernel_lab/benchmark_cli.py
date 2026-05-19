@@ -27,6 +27,11 @@ def add_common_benchmark_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", choices=DEVICES, default="auto")
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument(
+        "--skip-correctness",
+        action="store_true",
+        help="Skip the pre-benchmark PyTorch correctness check.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON records with run metadata.")
     parser.add_argument(
         "--output",
@@ -115,6 +120,15 @@ def dtype_label(dtype: Any) -> str:
     """Return a compact label for a torch dtype-like value."""
 
     return str(dtype).replace("torch.", "")
+
+
+def correctness_tolerance(dtype: Any) -> tuple[float, float]:
+    """Return default rtol/atol values for benchmark correctness checks."""
+
+    label = dtype_label(dtype)
+    if label in {"float16", "bfloat16"}:
+        return 1e-2, 1e-2
+    return 1e-4, 1e-5
 
 
 def emit_results(

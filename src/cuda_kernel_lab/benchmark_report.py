@@ -20,6 +20,7 @@ class ReportRow:
     primitive: str
     operation: str
     backend: str
+    strategy: str
     dtype: str
     shape: tuple[int, ...]
     variant: str
@@ -30,6 +31,7 @@ class ReportRow:
     tflops: float
     speedup_vs_torch: float | None
     noise_ratio: float | None
+    correctness: str
     run: dict[str, Any]
     source: Path
 
@@ -99,16 +101,16 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "## Fastest By Operation",
             "",
             "| Primitive | Operation | Dtype | Shape | Variant | Fastest Backend | "
-            "p50 ms | GB/s | TFLOP/s |",
-            "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |",
+            "Strategy | p50 ms | GB/s | TFLOP/s |",
+            "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |",
         ]
     )
     for row in _fastest_rows(rows):
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
-            f"{row.variant} | {row.backend} | {_fmt(row.p50_ms)} | {_fmt(row.bandwidth_gbps)} | "
-            f"{_fmt(row.tflops)} |"
+            f"{row.variant} | {row.backend} | {row.strategy} | {_fmt(row.p50_ms)} | "
+            f"{_fmt(row.bandwidth_gbps)} | {_fmt(row.tflops)} |"
         )
 
     lines.extend(
@@ -116,17 +118,18 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "",
             "## Backend Detail",
             "",
-            "| Primitive | Operation | Dtype | Shape | Variant | Backend | p50 ms | "
-            "p95 ms | p99 ms | GB/s | TFLOP/s | Speedup vs Torch | Noise |",
-            "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            "| Primitive | Operation | Dtype | Shape | Variant | Backend | Strategy | Correct | "
+            "p50 ms | p95 ms | p99 ms | GB/s | TFLOP/s | Speedup vs Torch | Noise |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | "
+            "---: | ---: | ---: | --- |",
         ]
     )
     for row in sorted(rows, key=_sort_key):
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
-            f"{row.variant} | {row.backend} | {_fmt(row.p50_ms)} | {_fmt(row.p95_ms)} | "
-            f"{_fmt(row.p99_ms)} | "
+            f"{row.variant} | {row.backend} | {row.strategy} | {row.correctness} | "
+            f"{_fmt(row.p50_ms)} | {_fmt(row.p95_ms)} | {_fmt(row.p99_ms)} | "
             f"{_fmt(row.bandwidth_gbps)} | {_fmt(row.tflops)} | "
             f"{_fmt_optional(row.speedup_vs_torch)} | "
             f"{_noise_label(row.noise_ratio)} |"
@@ -185,9 +188,10 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
         primitive=_primitive_label(str(run["benchmark"])),
         operation=operation,
         backend=backend,
+        strategy=str(result.get("strategy") or _strategy_label(backend)),
         dtype=str(result["dtype"]),
         shape=tuple(int(dim) for dim in result["shape"]),
-        variant=_variant_label(run),
+        variant=str(result.get("variant") or _variant_label(run)),
         p50_ms=float(result["p50_ms"]),
         p95_ms=float(result["p95_ms"]),
         p99_ms=float(result["p99_ms"]),
@@ -195,6 +199,7 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
         tflops=float(result["tflops"]),
         speedup_vs_torch=None,
         noise_ratio=_ratio(float(result["p95_ms"]), float(result["p50_ms"])),
+        correctness=_correctness_label(result.get("correctness")),
         run=run,
         source=source,
     )
@@ -219,6 +224,7 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
                 primitive=row.primitive,
                 operation=row.operation,
                 backend=row.backend,
+                strategy=row.strategy,
                 dtype=row.dtype,
                 shape=row.shape,
                 variant=row.variant,
@@ -229,6 +235,7 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
                 tflops=row.tflops,
                 speedup_vs_torch=speedup,
                 noise_ratio=row.noise_ratio,
+                correctness=row.correctness,
                 run=row.run,
                 source=row.source,
             )
@@ -252,6 +259,10 @@ def _primitive_label(benchmark: str) -> str:
     return benchmark
 
 
+def _strategy_label(backend: str) -> str:
+    return "torch-baseline" if backend == "torch" else f"{backend}-kernel"
+
+
 def _variant_label(run: dict[str, Any]) -> str:
     args = run.get("args")
     if not isinstance(args, dict):
@@ -268,6 +279,16 @@ def _variant_label(run: dict[str, Any]) -> str:
         if value is not None:
             fields.append(f"{key}={value}")
     return ", ".join(fields) if fields else "default"
+
+
+def _correctness_label(value: Any) -> str:
+    if not isinstance(value, dict) or not value.get("checked"):
+        return "not checked"
+    if value.get("passed") is True:
+        return "pass"
+    if value.get("passed") is False:
+        return "fail"
+    return "unknown"
 
 
 def _ratio(numerator: float, denominator: float) -> float | None:

@@ -8,7 +8,7 @@ the lesson is always the optimization strategy and the benchmark evidence.
 | --- | --- | --- |
 | 0 | benchmark discipline, device info, result metadata | implemented |
 | 1 | memory bandwidth primitives | implemented |
-| 2 | reduction strategies | started |
+| 2 | reduction strategies | strategy variants added |
 | 3 | softmax fusion | implemented |
 | 4 | normalization fusion | implemented |
 | 5 | SwiGLU elementwise fusion | planned |

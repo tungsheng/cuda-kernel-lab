@@ -6,9 +6,10 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
+from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable, check_tensors_close
 from cuda_kernel_lab.benchmark_cli import (
     add_common_benchmark_args,
+    correctness_tolerance,
     dtype_label,
     emit_results,
     ensure_backend_available,
@@ -47,6 +48,7 @@ def main() -> None:
                     eps=args.eps,
                     warmup=args.warmup,
                     iterations=args.iterations,
+                    skip_correctness=args.skip_correctness,
                 )
             )
 
@@ -83,6 +85,7 @@ def run_one(
     eps: float | None,
     warmup: int,
     iterations: int,
+    skip_correctness: bool,
 ) -> BenchmarkResult:
     if rows <= 0 or cols <= 0:
         raise ValueError("rows and cols must be positive")
@@ -92,6 +95,20 @@ def run_one(
     bias = torch.randn((cols,), device=device, dtype=dtype)
     out = torch.empty_like(x) if backend == "triton" else None
     fn = build_op(backend, op_name, x, weight, bias, eps, out)
+    effective_eps = default_eps(op_name) if eps is None else eps
+    correctness = None
+    if not skip_correctness:
+        expected = build_op("torch", op_name, x, weight, bias, effective_eps, None)()
+        actual = fn()
+        rtol, atol = correctness_tolerance(dtype)
+        correctness = check_tensors_close(
+            actual,
+            expected,
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+        )
+
     dtype_size = dtype_size_bytes(dtype)
 
     return benchmark_callable(
@@ -109,6 +126,10 @@ def run_one(
         flops=flop_count(op_name, rows=rows, cols=cols),
         warmup=warmup,
         iterations=iterations,
+        strategy="torch-baseline" if backend == "torch" else f"triton-fused-{op_name}",
+        variant=f"eps={effective_eps:g}",
+        parameters={"eps": effective_eps},
+        correctness=correctness,
     )
 
 

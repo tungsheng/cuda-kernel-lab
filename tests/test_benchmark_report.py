@@ -105,10 +105,10 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
     assert "- CUDA devices: `NVIDIA A10G" in report
     assert (
         "| softmax | softmax | float16 | 4096x1024 | "
-        "traffic_model=fused | triton | 1.5 | 50 | 1 |"
+        "traffic_model=fused | triton | triton-fused-row-softmax | 1.5 | 50 | 1 |"
     ) in report
     assert "| softmax | softmax | float16 | 4096x1024 | traffic_model=fused" in report
-    assert "| triton | 1.5 | 1.6 | 1.7 |" in report
+    assert "| triton | triton-fused-row-softmax | pass | 1.5 | 1.6 | 1.7 |" in report
     assert "| 2 | 1.067 |" in report
 
 
@@ -205,6 +205,19 @@ def _record(
             "flops": 1,
             "tflops": tflops,
             "latencies_ms": [p50, p95, p99],
+            "strategy": _strategy_for(name),
+            "variant": _variant_for(benchmark, args or _args_for(benchmark)),
+            "parameters": args or _args_for(benchmark),
+            "correctness": {
+                "checked": True,
+                "passed": True,
+                "reference_backend": "torch",
+                "max_abs_error": 0.0,
+                "max_rel_error": 0.0,
+                "atol": 1e-5,
+                "rtol": 1e-4,
+                "message": None,
+            },
         },
     }
 
@@ -217,3 +230,22 @@ def _args_for(benchmark: str) -> dict[str, object]:
     if benchmark == "norms":
         return {"eps": None, "warmup": 25, "iterations": 100}
     return {}
+
+
+def _variant_for(benchmark: str, args: dict[str, object]) -> str:
+    if benchmark == "memory_bandwidth":
+        return f"block_size={args['block_size']}"
+    if benchmark == "softmax":
+        return "traffic_model=fused"
+    if benchmark == "norms":
+        return "eps=1e-06"
+    return "default"
+
+
+def _strategy_for(name: str) -> str:
+    backend, operation = name.split(":", maxsplit=1)
+    if backend == "torch":
+        return "torch-baseline"
+    if operation == "softmax":
+        return "triton-fused-row-softmax"
+    return f"triton-{operation}"

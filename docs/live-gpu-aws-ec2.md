@@ -69,7 +69,7 @@ After launch, SSH to the host and run the benchmark evidence pass:
 ```bash
 ssh -i <key-file.pem> ubuntu@<public-ip>
 cd ~/cuda-kernel-lab
-uv run benchmark-matrix --include-vector-add-sweep
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
@@ -127,13 +127,13 @@ Confirm the host is ready:
 ```bash
 uv run gpu-info
 uv run pytest
-uv run benchmark-matrix --include-vector-add-sweep --dry-run
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
 ```
 
 ## Run The First Evidence Matrix
 
 ```bash
-uv run benchmark-matrix --include-vector-add-sweep
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 
@@ -156,6 +156,16 @@ ncu --set full --target-processes all uv run benchmark-softmax --backend triton 
 ```
 
 Save compact profiler notes under `profiling/reports/`.
+
+Generate a compact Markdown summary from a CSV/text Nsight Compute export:
+
+```bash
+uv run nsight-summary \
+  --input profiling/nsight_compute/vector-add.csv \
+  --output profiling/reports/vector-add-a10g.md \
+  --operation vector_add \
+  --strategy triton-block-size
+```
 
 ## Terminate
 

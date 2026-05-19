@@ -10,3 +10,9 @@ Example command shape:
 ```bash
 ncu --set full --target-processes all uv run benchmark-memory --backend triton --device cuda --op vector_add
 ```
+
+When exporting a small text or CSV summary, convert it with:
+
+```bash
+uv run nsight-summary --input profiling/nsight_compute/vector-add.csv --output profiling/reports/vector-add-a10g.md
+```

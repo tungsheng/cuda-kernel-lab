@@ -12,8 +12,8 @@ uv run benchmark-memory --backend all --device cuda --op all --output experiment
 First live-GPU evidence run:
 
 ```bash
-uv run benchmark-matrix --include-vector-add-sweep --dry-run
-uv run benchmark-matrix --include-vector-add-sweep
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2-first-run
 ```
 

@@ -6,9 +6,10 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable
+from cuda_kernel_lab.benchmark import BenchmarkResult, benchmark_callable, check_tensors_close
 from cuda_kernel_lab.benchmark_cli import (
     add_common_benchmark_args,
+    correctness_tolerance,
     dtype_label,
     emit_results,
     ensure_backend_available,
@@ -20,9 +21,10 @@ from cuda_kernel_lab.benchmark_cli import (
     selected_ops,
 )
 from cuda_kernel_lab.metrics import dtype_size_bytes
-from cuda_kernel_lab.ops.memory import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.ops.memory import flop_count, memory_traffic_bytes, reduction_traffic_bytes
 
 OPS = ("copy", "scale", "vector_add", "reduction_sum")
+REDUCTION_STRATEGIES = ("iterative", "two_pass")
 
 
 def main() -> None:
@@ -47,6 +49,8 @@ def main() -> None:
                     warmup=args.warmup,
                     iterations=args.iterations,
                     block_size=args.block_size,
+                    reduction_strategy=args.reduction_strategy,
+                    skip_correctness=args.skip_correctness,
                 )
             )
 
@@ -67,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1024,
         help="Triton block size for memory kernels; ignored by the torch backend.",
+    )
+    parser.add_argument(
+        "--reduction-strategy",
+        choices=REDUCTION_STRATEGIES,
+        default="iterative",
+        help="Reduction implementation strategy for reduction_sum.",
     )
     add_common_benchmark_args(parser)
     return parser.parse_args()
@@ -91,6 +101,8 @@ def run_one(
     warmup: int,
     iterations: int,
     block_size: int,
+    reduction_strategy: str,
+    skip_correctness: bool,
 ) -> BenchmarkResult:
     if numel <= 0:
         raise ValueError("numel must be positive")
@@ -100,8 +112,31 @@ def run_one(
     x = torch.randn(numel, device=device, dtype=dtype)
     y = torch.randn(numel, device=device, dtype=dtype)
     out = None if op_name == "reduction_sum" else torch.empty_like(x)
-    fn = build_op(backend, op_name, x, y, out, block_size)
+    fn = build_op(backend, op_name, x, y, out, block_size, reduction_strategy)
+    correctness = None
+    if not skip_correctness:
+        expected = build_reference_op(op_name, x, y)()
+        actual = fn()
+        rtol, atol = correctness_tolerance(dtype)
+        correctness = check_tensors_close(
+            actual,
+            expected,
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+        )
+
     dtype_size = dtype_size_bytes(dtype)
+    bytes_moved = (
+        reduction_traffic_bytes(
+            numel=numel,
+            dtype_size=dtype_size,
+            block_size=block_size,
+            strategy=reduction_strategy,
+        )
+        if op_name == "reduction_sum"
+        else memory_traffic_bytes(op_name, numel=numel, dtype_size=dtype_size)
+    )
 
     return benchmark_callable(
         f"{backend}:{op_name}",
@@ -109,10 +144,17 @@ def run_one(
         device=device,
         dtype=dtype_label(dtype),
         shape=(numel,),
-        bytes_moved=memory_traffic_bytes(op_name, numel=numel, dtype_size=dtype_size),
+        bytes_moved=bytes_moved,
         flops=flop_count(op_name, numel=numel),
         warmup=warmup,
         iterations=iterations,
+        strategy=_strategy_label(backend, op_name, reduction_strategy),
+        variant=_variant_label(op_name, block_size, reduction_strategy),
+        parameters={
+            "block_size": block_size,
+            "reduction_strategy": reduction_strategy,
+        },
+        correctness=correctness,
     )
 
 
@@ -123,6 +165,7 @@ def build_op(
     y: Any,
     out: Any | None,
     block_size: int,
+    reduction_strategy: str,
 ) -> Callable[[], Any]:
     if backend == "torch":
         from cuda_kernel_lab.kernels.torch_baselines import memory
@@ -146,9 +189,41 @@ def build_op(
         if op_name == "vector_add":
             return lambda: memory.vector_add(x, y, block_size=block_size, out=out)
         if op_name == "reduction_sum":
-            return lambda: memory.reduction_sum(x, block_size=block_size)
+            return lambda: memory.reduction_sum(
+                x,
+                block_size=block_size,
+                strategy=reduction_strategy,
+            )
 
     raise ValueError(f"unknown backend/op combination: {backend}:{op_name}")
+
+
+def build_reference_op(op_name: str, x: Any, y: Any) -> Callable[[], Any]:
+    from cuda_kernel_lab.kernels.torch_baselines import memory
+
+    if op_name == "copy":
+        return lambda: memory.copy(x)
+    if op_name == "scale":
+        return lambda: memory.scale(x, 0.5)
+    if op_name == "vector_add":
+        return lambda: memory.vector_add(x, y)
+    if op_name == "reduction_sum":
+        return lambda: memory.reduction_sum(x)
+    raise ValueError(f"unknown memory primitive: {op_name}")
+
+
+def _strategy_label(backend: str, op_name: str, reduction_strategy: str) -> str:
+    if backend == "torch":
+        return "torch-baseline"
+    if op_name == "reduction_sum":
+        return f"triton-reduction-{reduction_strategy.replace('_', '-')}"
+    return "triton-block-size"
+
+
+def _variant_label(op_name: str, block_size: int, reduction_strategy: str) -> str:
+    if op_name == "reduction_sum":
+        return f"reduction_strategy={reduction_strategy}, block_size={block_size}"
+    return f"block_size={block_size}"
 
 
 def print_table(results: list[BenchmarkResult]) -> None:

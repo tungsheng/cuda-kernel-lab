@@ -13,6 +13,9 @@ DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
 DEFAULT_MEMORY_BLOCK_SIZE = 1024
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
+DEFAULT_REDUCTION_STRATEGY = "iterative"
+DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
+REDUCTION_STRATEGIES = ("iterative", "two_pass")
 DEFAULT_DEVICE = "cuda"
 DTYPES = ("float32", "float16")
 
@@ -38,6 +41,9 @@ def build_matrix(
     memory_block_size: int = DEFAULT_MEMORY_BLOCK_SIZE,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
+    reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
+    include_reduction_sweep: bool = False,
+    reduction_sweep_strategies: tuple[str, ...] = DEFAULT_REDUCTION_SWEEP_STRATEGIES,
 ) -> tuple[MatrixCommand, ...]:
     """Build the default live-GPU benchmark command matrix."""
 
@@ -49,6 +55,10 @@ def build_matrix(
         raise ValueError("memory_block_size must be positive")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
+    if reduction_strategy not in REDUCTION_STRATEGIES:
+        raise ValueError("reduction_strategy must be one of iterative, two_pass")
+    if any(strategy not in REDUCTION_STRATEGIES for strategy in reduction_sweep_strategies):
+        raise ValueError("reduction_sweep_strategies must be one of iterative, two_pass")
 
     commands: list[MatrixCommand] = []
     for dtype in DTYPES:
@@ -72,6 +82,8 @@ def build_matrix(
                     dtype,
                     "--block-size",
                     str(memory_block_size),
+                    "--reduction-strategy",
+                    reduction_strategy,
                     "--warmup",
                     str(warmup),
                     "--iterations",
@@ -163,12 +175,51 @@ def build_matrix(
                         "float32",
                         "--block-size",
                         str(block_size),
+                        "--reduction-strategy",
+                        reduction_strategy,
                         "--warmup",
                         str(warmup),
                         "--iterations",
                         str(iterations),
                         "--output",
                         str(output_dir / "vector-add-block-size.jsonl"),
+                    ),
+                )
+            )
+
+    if include_reduction_sweep:
+        for strategy in _extra_values(
+            reduction_sweep_strategies,
+            baseline_value=reduction_strategy,
+        ):
+            commands.append(
+                MatrixCommand(
+                    primitive="memory",
+                    dtype="float32",
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-memory",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--op",
+                        "reduction_sum",
+                        "--numel",
+                        "16777216",
+                        "--dtype",
+                        "float32",
+                        "--block-size",
+                        str(memory_block_size),
+                        "--reduction-strategy",
+                        strategy,
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "reduction-strategy.jsonl"),
                     ),
                 )
             )
@@ -203,6 +254,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Triton block size passed to benchmark-memory commands.",
     )
     parser.add_argument(
+        "--reduction-strategy",
+        choices=REDUCTION_STRATEGIES,
+        default=DEFAULT_REDUCTION_STRATEGY,
+        help="Reduction strategy passed to benchmark-memory commands.",
+    )
+    parser.add_argument(
         "--include-vector-add-sweep",
         action="store_true",
         help="Add the first vector_add block-size strategy sweep.",
@@ -211,6 +268,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--vector-add-sweep-block-sizes",
         default=_join_block_sizes(DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES),
         help="Comma-separated block sizes for --include-vector-add-sweep.",
+    )
+    parser.add_argument(
+        "--include-reduction-sweep",
+        action="store_true",
+        help="Add the first reduction_sum strategy sweep.",
+    )
+    parser.add_argument(
+        "--reduction-sweep-strategies",
+        default=_join_values(DEFAULT_REDUCTION_SWEEP_STRATEGIES),
+        help="Comma-separated strategies for --include-reduction-sweep.",
     )
     return parser.parse_args(argv)
 
@@ -225,6 +292,9 @@ def main(argv: list[str] | None = None) -> None:
         memory_block_size=args.memory_block_size,
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
+        reduction_strategy=args.reduction_strategy,
+        include_reduction_sweep=args.include_reduction_sweep,
+        reduction_sweep_strategies=_parse_values(args.reduction_sweep_strategies),
     )
 
     if args.dry_run:
@@ -262,8 +332,30 @@ def _extra_vector_add_block_sizes(
     return tuple(extras)
 
 
+def _parse_values(value: str) -> tuple[str, ...]:
+    values = tuple(part.strip() for part in value.split(",") if part.strip())
+    if not values:
+        raise ValueError("comma-separated values must not be empty")
+    return values
+
+
+def _extra_values(values: tuple[str, ...], *, baseline_value: str) -> tuple[str, ...]:
+    seen = {baseline_value}
+    extras = []
+    for value in values:
+        if value in seen:
+            continue
+        extras.append(value)
+        seen.add(value)
+    return tuple(extras)
+
+
 def _join_block_sizes(block_sizes: tuple[int, ...]) -> str:
     return ",".join(str(block_size) for block_size in block_sizes)
+
+
+def _join_values(values: tuple[str, ...]) -> str:
+    return ",".join(values)
 
 
 if __name__ == "__main__":

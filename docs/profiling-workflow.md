@@ -32,6 +32,19 @@ ncu --set full --target-processes all uv run benchmark-softmax --backend triton 
 Large binary captures are ignored by default. Commit compact text summaries in
 `profiling/reports/`.
 
+If you export a CSV or text summary from Nsight Compute, convert it to a compact
+repo note:
+
+```bash
+uv run nsight-summary \
+  --input profiling/nsight_compute/vector-add.csv \
+  --output profiling/reports/vector-add-a10g.md \
+  --benchmark-command "uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32" \
+  --result-jsonl experiments/results/aws-ec2-first-run-profiled/memory-profiled.jsonl \
+  --operation vector_add \
+  --strategy triton-block-size
+```
+
 ## What To Look For
 
 - achieved memory throughput

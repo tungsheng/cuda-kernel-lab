@@ -32,7 +32,8 @@ def test_matrix_commands_include_shapes_and_output_paths() -> None:
 
     assert (
         "uv run benchmark-memory --backend all --device cuda --op all --numel 16777216 "
-        "--dtype float32 --block-size 2048 --warmup 7 --iterations 11 "
+        "--dtype float32 --block-size 2048 --reduction-strategy iterative "
+        "--warmup 7 --iterations 11 "
         "--output results/memory.jsonl"
     ) in command_lines
     assert (
@@ -56,12 +57,14 @@ def test_matrix_can_include_vector_add_strategy_sweep() -> None:
     assert len(entries) == 8
     assert (
         "uv run benchmark-memory --backend all --device cuda --op vector_add "
-        "--numel 16777216 --dtype float32 --block-size 512 --warmup 25 --iterations 100 "
+        "--numel 16777216 --dtype float32 --block-size 512 --reduction-strategy iterative "
+        "--warmup 25 --iterations 100 "
         "--output results/vector-add-block-size.jsonl"
     ) in command_lines
     assert (
         "uv run benchmark-memory --backend all --device cuda --op vector_add "
-        "--numel 16777216 --dtype float32 --block-size 2048 --warmup 25 --iterations 100 "
+        "--numel 16777216 --dtype float32 --block-size 2048 --reduction-strategy iterative "
+        "--warmup 25 --iterations 100 "
         "--output results/vector-add-block-size.jsonl"
     ) in command_lines
 
@@ -74,6 +77,22 @@ def test_matrix_sweep_does_not_repeat_baseline_block_size() -> None:
     assert len(entries) == 8
     assert len(sweep_lines) == 2
     assert all("--block-size 1024" not in line for line in sweep_lines)
+
+
+def test_matrix_can_include_reduction_strategy_sweep() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_reduction_sweep=True,
+        reduction_sweep_strategies=("iterative", "two_pass"),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert len(entries) == 7
+    assert (
+        "uv run benchmark-memory --backend all --device cuda --op reduction_sum "
+        "--numel 16777216 --dtype float32 --block-size 1024 --reduction-strategy two_pass "
+        "--warmup 25 --iterations 100 --output results/reduction-strategy.jsonl"
+    ) in command_lines
 
 
 def test_dry_run_prints_without_executing(
@@ -107,6 +126,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="vector_add_sweep_block_sizes"):
         benchmark_matrix.build_matrix(vector_add_sweep_block_sizes=(512, 0))
 
+    with pytest.raises(ValueError, match="reduction_strategy"):
+        benchmark_matrix.build_matrix(reduction_strategy="")
+
 
 def test_matrix_parses_vector_add_sweep_block_sizes(
     capsys: pytest.CaptureFixture[str],
@@ -119,6 +141,9 @@ def test_matrix_parses_vector_add_sweep_block_sizes(
             "--include-vector-add-sweep",
             "--vector-add-sweep-block-sizes",
             "256,512",
+            "--include-reduction-sweep",
+            "--reduction-sweep-strategies",
+            "iterative,two_pass",
         ]
     )
 
@@ -126,3 +151,5 @@ def test_matrix_parses_vector_add_sweep_block_sizes(
     assert "--block-size 256" in output
     assert "--block-size 512" in output
     assert "results/vector-add-block-size.jsonl" in output
+    assert "--reduction-strategy two_pass" in output
+    assert "results/reduction-strategy.jsonl" in output
