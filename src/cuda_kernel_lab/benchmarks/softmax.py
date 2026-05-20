@@ -21,6 +21,7 @@ from cuda_kernel_lab.benchmark_cli import (
 )
 from cuda_kernel_lab.metrics import dtype_size_bytes
 from cuda_kernel_lab.ops.softmax import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.optimization import softmax_optimization
 
 TRAFFIC_MODELS = ("fused", "naive")
 
@@ -121,6 +122,7 @@ def run_one(
         strategy="torch-baseline" if backend == "torch" else "triton-fused-row-softmax",
         variant=f"traffic_model={traffic_model}",
         parameters={"traffic_model": traffic_model},
+        optimization=softmax_optimization(backend=backend),
         correctness=correctness,
     )
 

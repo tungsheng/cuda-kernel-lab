@@ -21,6 +21,7 @@ from cuda_kernel_lab.benchmark_cli import (
 )
 from cuda_kernel_lab.metrics import dtype_size_bytes
 from cuda_kernel_lab.ops.swiglu import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.optimization import swiglu_optimization
 
 
 def main() -> None:
@@ -123,6 +124,7 @@ def run_one(
         strategy="torch-baseline" if backend == "torch" else "triton-fused-swiglu",
         variant=f"block_size={block_size}",
         parameters={"block_size": block_size},
+        optimization=swiglu_optimization(backend=backend),
         correctness=correctness,
     )
 

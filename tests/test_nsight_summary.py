@@ -75,4 +75,7 @@ def test_render_markdown_includes_context_and_metrics(tmp_path: Path) -> None:
 
     assert "# Vector Add Profile" in report
     assert "- Operation: `vector_add`" in report
+    assert "- Strategy label: `triton-block-size`" in report
+    assert "- Method family: `launch tuning`" in report
+    assert "- Optimization technique: `Coalesced block-size tuning`" in report
     assert "| Registers per thread | 32 | register/thread |" in report

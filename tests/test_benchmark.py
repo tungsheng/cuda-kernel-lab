@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 
 from cuda_kernel_lab.benchmark import BenchmarkResult, CorrectnessResult, collect_run_metadata
+from cuda_kernel_lab.optimization import memory_optimization
 
 
-def test_benchmark_result_includes_strategy_and_correctness_metadata() -> None:
+def test_benchmark_result_includes_strategy_optimization_and_correctness_metadata() -> None:
     result = BenchmarkResult(
         name="triton:vector_add",
         device="cuda",
@@ -17,6 +18,11 @@ def test_benchmark_result_includes_strategy_and_correctness_metadata() -> None:
         strategy="triton-block-size",
         variant="block_size=1024",
         parameters={"block_size": 1024},
+        optimization=memory_optimization(
+            backend="triton",
+            op_name="vector_add",
+            reduction_strategy="iterative",
+        ),
         correctness=CorrectnessResult(
             checked=True,
             passed=True,
@@ -33,6 +39,9 @@ def test_benchmark_result_includes_strategy_and_correctness_metadata() -> None:
     assert payload["strategy"] == "triton-block-size"
     assert payload["variant"] == "block_size=1024"
     assert payload["parameters"] == {"block_size": 1024}
+    assert payload["optimization"]["method_family"] == "launch tuning"
+    assert payload["optimization"]["technique"] == "Coalesced block-size tuning"
+    assert "knobs" not in payload["optimization"]
     assert payload["correctness"]["checked"] is True
     assert payload["correctness"]["passed"] is True
 

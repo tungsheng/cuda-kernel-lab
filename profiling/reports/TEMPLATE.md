@@ -10,7 +10,10 @@ One sentence with the conclusion.
 - JSONL result:
 - Operation:
 - Backend:
-- Optimization strategy:
+- Method family:
+- Optimization technique:
+- Hypothesis:
+- Knobs changed:
 - Shape:
 - Dtype:
 - Device:
@@ -38,7 +41,7 @@ Record only counters that affect the conclusion.
 ## Interpretation
 
 Is the kernel memory-bound or compute-bound? Did profiler counters confirm the
-benchmark traffic model and the optimization strategy?
+benchmark traffic model and the optimization technique hypothesis?
 
 ## Follow-Up
 

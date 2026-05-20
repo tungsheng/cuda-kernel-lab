@@ -41,6 +41,8 @@ def test_load_report_rows_computes_speedups_and_noise(tmp_path: Path) -> None:
     assert triton.primitive == "memory"
     assert triton.operation == "vector_add"
     assert triton.variant == "block_size=1024"
+    assert triton.optimization.method_family == "launch tuning"
+    assert triton.optimization.technique == "Coalesced block-size tuning"
     assert triton.speedup_vs_torch == pytest.approx(2.0)
     assert triton.noise_ratio == pytest.approx(1.4)
 
@@ -104,17 +106,27 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
     assert "Status: generated from benchmark JSONL" in report
     assert "- Git commit: `abc123`" in report
     assert "- CUDA devices: `NVIDIA A10G" in report
+    assert "## Optimization Techniques Tested" in report
+    assert "| fusion | Row-wise softmax fusion | softmax softmax |" in report
     assert (
         "| softmax | softmax | float16 | 4096x1024 | "
-        "traffic_model=fused | triton | triton-fused-row-softmax | 1.5 | 50 | 1 |"
+        "traffic_model=fused | triton | Row-wise softmax fusion | 1.5 | 50 | 1 |"
     ) in report
     assert "- Loaded 2 benchmark rows from 1 result file." in report
     assert (
         "- Largest Triton wins vs torch: softmax softmax float16 traffic_model=fused (2x)."
         in report
     )
+    assert (
+        "- Fusion techniques produced the strongest Triton wins by removing "
+        "intermediate traffic or launch overhead: softmax softmax float16 "
+        "traffic_model=fused (2x)."
+    ) in report
     assert "| softmax | softmax | float16 | 4096x1024 | traffic_model=fused" in report
-    assert "| triton | triton-fused-row-softmax | pass | 1.5 | 1.6 | 1.7 |" in report
+    assert (
+        "| triton | triton-fused-row-softmax | Row-wise softmax fusion | pass | "
+        "1.5 | 1.6 | 1.7 |"
+    ) in report
     assert "| 2 | 1.067 |" in report
 
 

@@ -133,7 +133,7 @@ Each record includes:
 - visible CUDA device metadata
 - raw latencies
 - p50, p95, p99, GB/s, and TFLOP/s
-- explicit strategy, variant, and parameter metadata
+- explicit strategy, variant, parameter, and optimization technique metadata
 - correctness check status and max error values against the PyTorch reference
 
 Keep large result files under `experiments/results/`. That directory is ignored

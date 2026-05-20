@@ -11,6 +11,8 @@ a lower latency.
 - `TFLOP/s`: estimated FLOPs divided by p50 latency.
 - `bytes_moved`: analytical traffic model, not a profiler counter.
 - `flops`: scalar accounting model, not instruction-level analysis.
+- `optimization`: method family, concrete technique, hypothesis, and expected
+  profiler signal for the experiment. Tuned knobs remain in `parameters`.
 
 ## First Questions
 
@@ -22,7 +24,9 @@ Ask these in order:
 4. Does GB/s explain the result better than TFLOP/s?
 5. Did fusion remove reads or writes?
 6. Which optimization strategy changed the metric?
-7. Do profiler counters support the analytical traffic model?
+7. Which concrete optimization technique was tested?
+8. Do profiler counters support the analytical traffic model and technique
+   hypothesis?
 
 ## Common Mistakes
 

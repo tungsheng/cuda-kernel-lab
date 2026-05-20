@@ -9,6 +9,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from cuda_kernel_lab.optimization import technique_from_strategy
+
 KEY_METRICS = {
     "gpu__time_duration.sum": "Kernel time",
     "dram__throughput.avg.pct_of_peak_sustained_elapsed": "DRAM throughput",
@@ -54,6 +56,7 @@ def render_markdown(
 ) -> str:
     """Render a compact profiler summary."""
 
+    optimization = technique_from_strategy(strategy)
     lines = [
         f"# {title}",
         "",
@@ -62,7 +65,10 @@ def render_markdown(
         f"- Benchmark command: `{benchmark_command or ''}`",
         f"- JSONL result: `{result_jsonl or ''}`",
         f"- Operation: `{operation or ''}`",
-        f"- Strategy: `{strategy or ''}`",
+        f"- Strategy label: `{strategy or ''}`",
+        f"- Method family: `{optimization.method_family if optimization else ''}`",
+        f"- Optimization technique: `{optimization.technique if optimization else ''}`",
+        f"- Hypothesis: {optimization.hypothesis if optimization else ''}",
         "",
         "## Key Metrics",
         "",
@@ -82,11 +88,12 @@ def render_markdown(
             "",
             "## Interpretation",
             "",
-            "Compare these counters against the benchmark result before choosing the next change.",
+            "Compare these counters against the benchmark result and technique hypothesis "
+            "before choosing the next change.",
             "",
             "## Follow-Up",
             "",
-            "Record the next strategy change or profiler counter to inspect.",
+            "Record the next technique change or profiler counter to inspect.",
             "",
         ]
     )

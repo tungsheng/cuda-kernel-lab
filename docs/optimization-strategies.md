@@ -25,6 +25,7 @@ explains why it does not apply.
 Every strategy comparison should include:
 
 - operation, shape, dtype, backend, and device
+- method family, technique name, hypothesis, changed knobs, and expected profiler signal
 - p50, p95, and p99 latency
 - estimated bytes moved and effective GB/s
 - estimated FLOPs and effective TFLOP/s
@@ -34,6 +35,10 @@ Every strategy comparison should include:
 Profiler-backed reports should add the counters that explain the result, such as
 memory throughput, occupancy, registers per thread, shared memory per block, or
 Tensor Core utilization for matmul milestones.
+
+Use [Optimization Techniques](optimization-techniques.md) as the catalog for
+method names and experiment wording. The generated benchmark report also emits
+an "Optimization Techniques Tested" section from the JSONL metadata.
 
 ## Comparison Pattern
 

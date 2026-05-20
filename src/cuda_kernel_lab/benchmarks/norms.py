@@ -22,6 +22,7 @@ from cuda_kernel_lab.benchmark_cli import (
 )
 from cuda_kernel_lab.metrics import dtype_size_bytes
 from cuda_kernel_lab.ops.norms import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.optimization import norms_optimization
 
 OPS = ("rmsnorm", "layernorm")
 
@@ -129,6 +130,7 @@ def run_one(
         strategy="torch-baseline" if backend == "torch" else f"triton-fused-{op_name}",
         variant=f"eps={effective_eps:g}",
         parameters={"eps": effective_eps},
+        optimization=norms_optimization(backend=backend, op_name=op_name),
         correctness=correctness,
     )
 

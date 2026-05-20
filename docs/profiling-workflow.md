@@ -11,7 +11,7 @@ Record:
 - result JSONL path
 - device and driver context
 - shape, dtype, backend, and operation
-- optimization strategy being tested
+- optimization technique, method family, changed knobs, and hypothesis
 - expected bottleneck
 
 ## Nsight Compute

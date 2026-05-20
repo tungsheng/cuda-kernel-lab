@@ -4,9 +4,14 @@
 
 What are you trying to learn?
 
-## Optimization Strategy
+## Optimization Technique
 
-Which strategy is being tested?
+- Method family:
+- Technique:
+- Hypothesis:
+- Control:
+- Knobs changed:
+- Expected profiler signal:
 
 ## Command
 
@@ -55,7 +60,7 @@ What happened?
 
 ## Interpretation
 
-Why does it look that way? Did the strategy explain the metric change?
+Why does it look that way? Did the technique explain the metric change?
 
 ## Next Question
 

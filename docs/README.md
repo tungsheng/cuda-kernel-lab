@@ -11,6 +11,8 @@ context, or reporting shape behind a benchmark.
   host in `us-west-2` for real CUDA measurements.
 - [Interpreting Results](interpreting-results.md): read latency, bandwidth, and
   traffic-model columns.
+- [Optimization Techniques](optimization-techniques.md): name the concrete
+  method, hypothesis, knobs, and profiler signal for each experiment.
 - [Optimization Strategies](optimization-strategies.md): compare a baseline to
   a kernel change with evidence.
 - [Profiling Workflow](profiling-workflow.md): validate benchmark conclusions

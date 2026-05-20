@@ -18,6 +18,7 @@ from typing import Any
 
 from cuda_kernel_lab.device import collect_cuda_devices
 from cuda_kernel_lab.metrics import percentile
+from cuda_kernel_lab.optimization import OptimizationTechnique
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class BenchmarkResult:
     strategy: str = "baseline"
     variant: str = "default"
     parameters: dict[str, Any] | None = None
+    optimization: OptimizationTechnique | None = None
     correctness: CorrectnessResult | None = None
 
     @property
@@ -101,6 +103,7 @@ class BenchmarkResult:
             "strategy": self.strategy,
             "variant": self.variant,
             "parameters": _jsonable(self.parameters or {}),
+            "optimization": self.optimization.as_dict() if self.optimization is not None else {},
             "correctness": (
                 self.correctness.as_dict()
                 if self.correctness is not None
@@ -208,6 +211,7 @@ def benchmark_callable(
     strategy: str = "baseline",
     variant: str = "default",
     parameters: dict[str, Any] | None = None,
+    optimization: OptimizationTechnique | None = None,
     correctness: CorrectnessResult | None = None,
 ) -> BenchmarkResult:
     """Benchmark a callable with CUDA events when available and wall time otherwise."""
@@ -252,6 +256,7 @@ def benchmark_callable(
         strategy=strategy,
         variant=variant,
         parameters=parameters,
+        optimization=optimization,
         correctness=correctness,
     )
 

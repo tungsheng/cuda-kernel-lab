@@ -22,6 +22,7 @@ from cuda_kernel_lab.benchmark_cli import (
 )
 from cuda_kernel_lab.metrics import dtype_size_bytes
 from cuda_kernel_lab.ops.memory import flop_count, memory_traffic_bytes, reduction_traffic_bytes
+from cuda_kernel_lab.optimization import memory_optimization
 
 OPS = ("copy", "scale", "vector_add", "reduction_sum")
 REDUCTION_STRATEGIES = ("iterative", "two_pass")
@@ -154,6 +155,11 @@ def run_one(
             "block_size": block_size,
             "reduction_strategy": reduction_strategy,
         },
+        optimization=memory_optimization(
+            backend=backend,
+            op_name=op_name,
+            reduction_strategy=reduction_strategy,
+        ),
         correctness=correctness,
     )
 

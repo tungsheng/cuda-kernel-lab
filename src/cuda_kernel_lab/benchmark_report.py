@@ -11,6 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cuda_kernel_lab.optimization import (
+    OptimizationTechnique,
+    technique_from_mapping,
+    technique_from_result,
+)
+
 DEFAULT_INPUT_DIR = Path("experiments/results/aws-ec2/manual-run")
 RUN_RESULTS_ROOT = Path("experiments/results/aws-ec2")
 RUN_REPORT_ROOT = Path("experiments/reports/aws-ec2")
@@ -24,6 +30,7 @@ class ReportRow:
     operation: str
     backend: str
     strategy: str
+    optimization: OptimizationTechnique
     dtype: str
     shape: tuple[int, ...]
     variant: str
@@ -101,10 +108,21 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
     lines.extend(
         [
             "",
+            "## Optimization Techniques Tested",
+            "",
+            "| Family | Technique | Used By | Hypothesis |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    lines.extend(_optimization_technique_rows(rows))
+
+    lines.extend(
+        [
+            "",
             "## Fastest By Operation",
             "",
             "| Primitive | Operation | Dtype | Shape | Variant | Fastest Backend | "
-            "Strategy | p50 ms | GB/s | TFLOP/s |",
+            "Technique | p50 ms | GB/s | TFLOP/s |",
             "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: |",
         ]
     )
@@ -112,7 +130,8 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
-            f"{row.variant} | {row.backend} | {row.strategy} | {_fmt(row.p50_ms)} | "
+            f"{row.variant} | {row.backend} | {row.optimization.technique} | "
+            f"{_fmt(row.p50_ms)} | "
             f"{_fmt(row.bandwidth_gbps)} | {_fmt(row.tflops)} |"
         )
 
@@ -121,9 +140,9 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "",
             "## Backend Detail",
             "",
-            "| Primitive | Operation | Dtype | Shape | Variant | Backend | Strategy | Correct | "
-            "p50 ms | p95 ms | p99 ms | GB/s | TFLOP/s | Speedup vs Torch | Noise |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | "
+            "| Primitive | Operation | Dtype | Shape | Variant | Backend | Strategy | Technique | "
+            "Correct | p50 ms | p95 ms | p99 ms | GB/s | TFLOP/s | Speedup vs Torch | Noise |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | "
             "---: | ---: | ---: | --- |",
         ]
     )
@@ -131,7 +150,8 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
-            f"{row.variant} | {row.backend} | {row.strategy} | {row.correctness} | "
+            f"{row.variant} | {row.backend} | {row.strategy} | "
+            f"{row.optimization.technique} | {row.correctness} | "
             f"{_fmt(row.p50_ms)} | {_fmt(row.p95_ms)} | {_fmt(row.p99_ms)} | "
             f"{_fmt(row.bandwidth_gbps)} | {_fmt(row.tflops)} | "
             f"{_fmt_optional(row.speedup_vs_torch)} | "
@@ -144,6 +164,10 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "## Observation",
             "",
             *_observation_lines(rows),
+            "",
+            "## Technique Takeaways",
+            "",
+            *_technique_takeaway_lines(rows),
             "",
             "## Interpretation",
             "",
@@ -208,11 +232,25 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
     except (KeyError, ValueError) as exc:
         raise ValueError(f"invalid benchmark record in {source}:{line_number}") from exc
 
+    primitive = _primitive_label(str(run["benchmark"]))
+    parameters = result.get("parameters")
+    if not isinstance(parameters, dict):
+        parameters = {}
+    strategy = str(result.get("strategy") or _strategy_label(backend))
+    optimization = technique_from_mapping(result.get("optimization")) or technique_from_result(
+        backend=backend,
+        primitive=primitive,
+        operation=operation,
+        strategy=strategy,
+        parameters=parameters,
+    )
+
     return ReportRow(
-        primitive=_primitive_label(str(run["benchmark"])),
+        primitive=primitive,
         operation=operation,
         backend=backend,
-        strategy=str(result.get("strategy") or _strategy_label(backend)),
+        strategy=strategy,
+        optimization=optimization,
         dtype=str(result["dtype"]),
         shape=tuple(int(dim) for dim in result["shape"]),
         variant=str(result.get("variant") or _variant_label(run)),
@@ -249,6 +287,7 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
                 operation=row.operation,
                 backend=row.backend,
                 strategy=row.strategy,
+                optimization=row.optimization,
                 dtype=row.dtype,
                 shape=row.shape,
                 variant=row.variant,
@@ -275,6 +314,109 @@ def _fastest_rows(rows: list[ReportRow]) -> list[ReportRow]:
         if current is None or row.p50_ms < current.p50_ms:
             fastest[key] = row
     return sorted(fastest.values(), key=_sort_key)
+
+
+def _optimization_technique_rows(rows: list[ReportRow]) -> list[str]:
+    summaries: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        optimization = row.optimization
+        summary = summaries.setdefault(
+            optimization.method_id,
+            {
+                "family": optimization.method_family,
+                "technique": optimization.technique,
+                "hypothesis": optimization.hypothesis or optimization.description,
+                "used_by": set(),
+            },
+        )
+        summary["used_by"].add(_technique_use_label(row))
+
+    lines = []
+    for _method_id, summary in sorted(
+        summaries.items(),
+        key=lambda item: _method_sort_key(str(item[1]["family"]), item[0]),
+    ):
+        used_by = _used_by_label(sorted(summary["used_by"]))
+        lines.append(
+            "| "
+            f"{summary['family']} | {summary['technique']} | {used_by} | "
+            f"{_escape_cell(str(summary['hypothesis']))} |"
+        )
+    return lines
+
+
+def _technique_takeaway_lines(rows: list[ReportRow]) -> list[str]:
+    lines: list[str] = []
+    families = {row.optimization.method_family for row in rows}
+
+    if "fusion" in families:
+        fusion_wins = [
+            row
+            for row in rows
+            if row.backend == "triton"
+            and row.optimization.method_family == "fusion"
+            and row.speedup_vs_torch is not None
+            and row.speedup_vs_torch > 1
+        ]
+        if fusion_wins:
+            top = sorted(
+                fusion_wins,
+                key=lambda row: row.speedup_vs_torch or 0,
+                reverse=True,
+            )[:3]
+            lines.append(
+                "- Fusion techniques produced the strongest Triton wins by removing "
+                f"intermediate traffic or launch overhead: {_row_list_label(top)}."
+            )
+        else:
+            lines.append(
+                "- Fusion rows should be read as tests of intermediate-traffic removal, "
+                "not as generic Triton-vs-PyTorch comparisons."
+            )
+
+    if "launch tuning" in families:
+        launch_rows = [
+            row
+            for row in rows
+            if row.backend == "triton" and row.optimization.method_family == "launch tuning"
+        ]
+        if launch_rows and all((row.speedup_vs_torch or 0) <= 1 for row in launch_rows):
+            lines.append(
+                "- Launch tuning for simple coalesced memory kernels did not beat PyTorch; "
+                "compare GB/s and profiler DRAM throughput before adding wider block-size sweeps."
+            )
+        elif launch_rows:
+            lines.append(
+                "- Launch-tuning rows isolate block-size effects, so compare rows with the "
+                "same shape, dtype, and traffic model."
+            )
+
+    if "reduction" in families:
+        lines.append(
+            "- Reduction-strategy rows separate first-pass streaming bandwidth from "
+            "end-to-end launch and finalization cost."
+        )
+
+    if "tiling" in families:
+        tiling_rows = [
+            row
+            for row in rows
+            if row.backend == "triton" and row.optimization.method_family == "tiling"
+        ]
+        if tiling_rows:
+            best = max(tiling_rows, key=lambda row: row.tflops)
+            lines.append(
+                "- Tiled matmul rows should be judged by TFLOP/s and Tensor Core counters; "
+                f"the current best Triton tile is {_row_label(best)} at "
+                f"{_fmt(best.tflops)} TFLOP/s."
+            )
+        else:
+            lines.append(
+                "- Tiling rows should be paired with Tensor Core, register, and occupancy "
+                "counters before choosing a final tile shape."
+            )
+
+    return lines or ["- No cataloged optimization techniques were found in this result set."]
 
 
 def _observation_lines(rows: list[ReportRow]) -> list[str]:
@@ -392,6 +534,37 @@ def _row_label(row: ReportRow) -> str:
     if row.noise_ratio is not None and row.noise_ratio >= NOISE_RATIO_THRESHOLD:
         return f"{label} ({_fmt(row.noise_ratio)} noise)"
     return label
+
+
+def _technique_use_label(row: ReportRow) -> str:
+    if row.backend == "torch":
+        return "torch controls"
+    return f"{row.primitive} {row.operation}"
+
+
+def _used_by_label(values: list[str]) -> str:
+    compacted = []
+    for value in values:
+        if value not in compacted:
+            compacted.append(value)
+    if len(compacted) <= 4:
+        return ", ".join(compacted)
+    return ", ".join(compacted[:4]) + f", +{len(compacted) - 4} more"
+
+
+def _method_sort_key(family: str, method_id: str) -> tuple[int, str, str]:
+    order = {
+        "baseline": 0,
+        "launch tuning": 1,
+        "reduction": 2,
+        "fusion": 3,
+        "tiling": 4,
+    }
+    return (order.get(family, 99), family, method_id)
+
+
+def _escape_cell(value: str) -> str:
+    return value.replace("|", "\\|")
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:

@@ -9,6 +9,7 @@ into a Markdown starter report, then edit the interpretation by hand.
 Each report should answer:
 
 - What command and result are being explained?
+- Which optimization technique and hypothesis are being validated?
 - Which profiler counters matter?
 - Is the kernel memory-bound or compute-bound?
 - Did the counters confirm the benchmark interpretation?

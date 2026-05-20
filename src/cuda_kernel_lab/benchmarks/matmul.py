@@ -21,6 +21,7 @@ from cuda_kernel_lab.benchmark_cli import (
 )
 from cuda_kernel_lab.metrics import dtype_size_bytes
 from cuda_kernel_lab.ops.matmul import flop_count, memory_traffic_bytes
+from cuda_kernel_lab.optimization import matmul_optimization
 
 
 def main() -> None:
@@ -130,6 +131,7 @@ def run_one(
             "block_n": block_n,
             "block_k": block_k,
         },
+        optimization=matmul_optimization(backend=backend),
         correctness=correctness,
     )
 

@@ -100,6 +100,7 @@ eventually Tensor Core matmul. Broader inference-system experiments belong in
 
 - [Docs map](docs/README.md)
 - [Benchmark workflow](docs/benchmark-workflow.md)
+- [Optimization techniques](docs/optimization-techniques.md)
 - [AWS EC2 live GPU workflow](docs/live-gpu-aws-ec2.md)
 - [Optimization strategies](docs/optimization-strategies.md)
 - [Interpreting results](docs/interpreting-results.md)
