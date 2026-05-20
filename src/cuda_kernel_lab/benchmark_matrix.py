@@ -16,6 +16,12 @@ DEFAULT_SWIGLU_BLOCK_SIZE = 1024
 DEFAULT_MATMUL_BLOCK_M = 16
 DEFAULT_MATMUL_BLOCK_N = 16
 DEFAULT_MATMUL_BLOCK_K = 32
+DEFAULT_MATMUL_SWEEP_TILE_SHAPES = (
+    (16, 32, 32),
+    (32, 16, 32),
+    (32, 32, 32),
+    (32, 32, 64),
+)
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
 DEFAULT_REDUCTION_STRATEGY = "iterative"
 DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
@@ -48,6 +54,8 @@ def build_matrix(
     matmul_block_m: int = DEFAULT_MATMUL_BLOCK_M,
     matmul_block_n: int = DEFAULT_MATMUL_BLOCK_N,
     matmul_block_k: int = DEFAULT_MATMUL_BLOCK_K,
+    include_matmul_sweep: bool = False,
+    matmul_sweep_tile_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_TILE_SHAPES,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -66,6 +74,10 @@ def build_matrix(
         raise ValueError("swiglu_block_size must be positive")
     if matmul_block_m <= 0 or matmul_block_n <= 0 or matmul_block_k <= 0:
         raise ValueError("matmul block sizes must be positive")
+    if any(len(tile_shape) != 3 for tile_shape in matmul_sweep_tile_shapes):
+        raise ValueError("matmul_sweep_tile_shapes must be MxNxK triples")
+    if any(any(dim <= 0 for dim in tile_shape) for tile_shape in matmul_sweep_tile_shapes):
+        raise ValueError("matmul_sweep_tile_shapes must be positive")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
     if reduction_strategy not in REDUCTION_STRATEGIES:
@@ -74,6 +86,7 @@ def build_matrix(
         raise ValueError("reduction_sweep_strategies must be one of iterative, two_pass")
 
     commands: list[MatrixCommand] = []
+    matmul_baseline_tile_shape = (matmul_block_m, matmul_block_n, matmul_block_k)
     for dtype in DTYPES:
         commands.append(
             MatrixCommand(
@@ -191,39 +204,20 @@ def build_matrix(
                 ),
             )
         )
-        if include_matmul:
+        if include_matmul or include_matmul_sweep:
             commands.append(
                 MatrixCommand(
                     primitive="matmul",
                     dtype=dtype,
-                    command=(
-                        "uv",
-                        "run",
-                        "benchmark-matmul",
-                        "--backend",
-                        "all",
-                        "--device",
-                        device,
-                        "--m",
-                        "1024",
-                        "--n",
-                        "1024",
-                        "--k",
-                        "1024",
-                        "--dtype",
-                        dtype,
-                        "--block-m",
-                        str(matmul_block_m),
-                        "--block-n",
-                        str(matmul_block_n),
-                        "--block-k",
-                        str(matmul_block_k),
-                        "--warmup",
-                        str(warmup),
-                        "--iterations",
-                        str(iterations),
-                        "--output",
-                        str(output_dir / "matmul.jsonl"),
+                    command=_matmul_command(
+                        device=device,
+                        dtype=dtype,
+                        block_m=matmul_block_m,
+                        block_n=matmul_block_n,
+                        block_k=matmul_block_k,
+                        warmup=warmup,
+                        iterations=iterations,
+                        output=output_dir / "matmul.jsonl",
                     ),
                 )
             )
@@ -301,6 +295,28 @@ def build_matrix(
                     ),
                 )
             )
+
+    if include_matmul_sweep:
+        for block_m, block_n, block_k in _extra_matmul_tile_shapes(
+            matmul_sweep_tile_shapes,
+            baseline_tile_shape=matmul_baseline_tile_shape,
+        ):
+            commands.append(
+                MatrixCommand(
+                    primitive="matmul",
+                    dtype="float16",
+                    command=_matmul_command(
+                        device=device,
+                        dtype="float16",
+                        block_m=block_m,
+                        block_n=block_n,
+                        block_k=block_k,
+                        warmup=warmup,
+                        iterations=iterations,
+                        output=output_dir / "matmul-tile-shape.jsonl",
+                    ),
+                )
+            )
     return tuple(commands)
 
 
@@ -346,6 +362,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--matmul-block-n", type=int, default=DEFAULT_MATMUL_BLOCK_N)
     parser.add_argument("--matmul-block-k", type=int, default=DEFAULT_MATMUL_BLOCK_K)
     parser.add_argument(
+        "--include-matmul-sweep",
+        action="store_true",
+        help="Add the float16 matmul tile-shape strategy sweep.",
+    )
+    parser.add_argument(
+        "--matmul-sweep-tile-shapes",
+        default=_join_tile_shapes(DEFAULT_MATMUL_SWEEP_TILE_SHAPES),
+        help="Comma-separated MxNxK tile shapes for --include-matmul-sweep.",
+    )
+    parser.add_argument(
         "--reduction-strategy",
         choices=REDUCTION_STRATEGIES,
         default=DEFAULT_REDUCTION_STRATEGY,
@@ -387,6 +413,8 @@ def main(argv: list[str] | None = None) -> None:
         matmul_block_m=args.matmul_block_m,
         matmul_block_n=args.matmul_block_n,
         matmul_block_k=args.matmul_block_k,
+        include_matmul_sweep=args.include_matmul_sweep,
+        matmul_sweep_tile_shapes=_parse_tile_shapes(args.matmul_sweep_tile_shapes),
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,
@@ -404,6 +432,48 @@ def main(argv: list[str] | None = None) -> None:
         subprocess.run(entry.command, check=True)
 
 
+def _matmul_command(
+    *,
+    device: str,
+    dtype: str,
+    block_m: int,
+    block_n: int,
+    block_k: int,
+    warmup: int,
+    iterations: int,
+    output: Path,
+) -> tuple[str, ...]:
+    return (
+        "uv",
+        "run",
+        "benchmark-matmul",
+        "--backend",
+        "all",
+        "--device",
+        device,
+        "--m",
+        "1024",
+        "--n",
+        "1024",
+        "--k",
+        "1024",
+        "--dtype",
+        dtype,
+        "--block-m",
+        str(block_m),
+        "--block-n",
+        str(block_n),
+        "--block-k",
+        str(block_k),
+        "--warmup",
+        str(warmup),
+        "--iterations",
+        str(iterations),
+        "--output",
+        str(output),
+    )
+
+
 def _parse_block_sizes(value: str) -> tuple[int, ...]:
     try:
         block_sizes = tuple(int(part.strip()) for part in value.split(",") if part.strip())
@@ -412,6 +482,25 @@ def _parse_block_sizes(value: str) -> tuple[int, ...]:
     if not block_sizes:
         raise ValueError("vector_add_sweep_block_sizes must not be empty")
     return block_sizes
+
+
+def _parse_tile_shapes(value: str) -> tuple[tuple[int, ...], ...]:
+    tile_shapes = []
+    try:
+        for token in (part.strip() for part in value.split(",")):
+            if not token:
+                continue
+            dimensions = tuple(int(part.strip()) for part in token.lower().split("x"))
+            if len(dimensions) != 3:
+                raise ValueError
+            tile_shapes.append(dimensions)
+    except ValueError as exc:
+        raise ValueError(
+            "matmul_sweep_tile_shapes must be comma-separated MxNxK triples"
+        ) from exc
+    if not tile_shapes:
+        raise ValueError("matmul_sweep_tile_shapes must not be empty")
+    return tuple(tile_shapes)
 
 
 def _extra_vector_add_block_sizes(
@@ -426,6 +515,23 @@ def _extra_vector_add_block_sizes(
             continue
         extras.append(block_size)
         seen.add(block_size)
+    return tuple(extras)
+
+
+def _extra_matmul_tile_shapes(
+    tile_shapes: tuple[tuple[int, ...], ...],
+    *,
+    baseline_tile_shape: tuple[int, int, int],
+) -> tuple[tuple[int, int, int], ...]:
+    seen = {baseline_tile_shape}
+    extras = []
+    for tile_shape in tile_shapes:
+        block_m, block_n, block_k = tile_shape
+        normalized = (block_m, block_n, block_k)
+        if normalized in seen:
+            continue
+        extras.append(normalized)
+        seen.add(normalized)
     return tuple(extras)
 
 
@@ -449,6 +555,10 @@ def _extra_values(values: tuple[str, ...], *, baseline_value: str) -> tuple[str,
 
 def _join_block_sizes(block_sizes: tuple[int, ...]) -> str:
     return ",".join(str(block_size) for block_size in block_sizes)
+
+
+def _join_tile_shapes(tile_shapes: tuple[tuple[int, int, int], ...]) -> str:
+    return ",".join(f"{block_m}x{block_n}x{block_k}" for block_m, block_n, block_k in tile_shapes)
 
 
 def _join_values(values: tuple[str, ...]) -> str:

@@ -77,6 +77,7 @@ REMOTE_DIR="cuda-kernel-lab"
 OUTPUT_ROOT="experiments/results/aws-ec2"
 REPORT_ROOT="experiments/reports/aws-ec2"
 INCLUDE_MATMUL=0
+INCLUDE_MATMUL_SWEEP=0
 PROFILE=0
 DRY_RUN=0
 
@@ -118,6 +119,7 @@ Options:
   --instance-type <type>    EC2 GPU instance. Default: ${INSTANCE_TYPE}
   --name <name>             EC2 Name tag. Default: cuda-kernel-lab-<run-id>
   --include-matmul          Include the tiled matmul progression in the matrix.
+  --include-matmul-sweep    Include the float16 matmul tile-shape strategy sweep.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
@@ -130,7 +132,7 @@ Examples:
   ./scripts/live-benchmark
   ./scripts/live-benchmark --run-id 2026-05-19-a10g-baseline
   ./scripts/live-benchmark --run-id 2026-05-19-a10g-profile --with-profiling
-  ./scripts/live-benchmark --profile personal --instance-type g6.xlarge --include-matmul
+  ./scripts/live-benchmark --profile personal --instance-type g6.xlarge --include-matmul-sweep --with-profiling
   ./scripts/live-benchmark --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
 EOF
 }
@@ -179,6 +181,10 @@ parse_args() {
         ;;
       --include-matmul)
         INCLUDE_MATMUL=1
+        shift
+        ;;
+      --include-matmul-sweep)
+        INCLUDE_MATMUL_SWEEP=1
         shift
         ;;
       --output-root)
@@ -368,6 +374,9 @@ remote_benchmark_command() {
   if [[ "${INCLUDE_MATMUL}" == "1" ]]; then
     command+=" --include-matmul"
   fi
+  if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
+    command+=" --include-matmul-sweep"
+  fi
   command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
 
   printf '%s\n' "${command}"
@@ -393,6 +402,10 @@ profile_benchmark_command() {
       printf '%s\n' \
         "uv run benchmark-norms --backend triton --device cuda --op rmsnorm --rows 4096 --cols 4096 --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/norms-rmsnorm-float16.jsonl"
       ;;
+    matmul-tiled-float16)
+      printf '%s\n' \
+        "uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --block-m 32 --block-n 32 --block-k 32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tiled-float16.jsonl"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -415,6 +428,9 @@ profile_title() {
     norms-rmsnorm-float16)
       printf '%s\n' "A10G RMSNorm float16 profile"
       ;;
+    matmul-tiled-float16)
+      printf '%s\n' "A10G matmul float16 tiled-dot profile"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -433,6 +449,9 @@ profile_operation() {
       ;;
     norms-rmsnorm-float16)
       printf '%s\n' "rmsnorm"
+      ;;
+    matmul-tiled-float16)
+      printf '%s\n' "matmul"
       ;;
     *)
       die "unknown profile target: ${target}"
@@ -456,6 +475,9 @@ profile_strategy() {
     norms-rmsnorm-float16)
       printf '%s\n' "triton-fused-rmsnorm"
       ;;
+    matmul-tiled-float16)
+      printf '%s\n' "triton-tiled-dot-block-32x32x32"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -469,7 +491,7 @@ profile_launch_skip() {
     memory-reduction-two-pass-float32)
       printf '%s\n' "10"
       ;;
-    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16)
+    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16)
       printf '%s\n' "5"
       ;;
     *)
@@ -535,7 +557,8 @@ remote_profile_command() {
     memory-vector-add-float32 \
     memory-reduction-iterative-float32 \
     memory-reduction-two-pass-float32 \
-    norms-rmsnorm-float16; do
+    norms-rmsnorm-float16 \
+    matmul-tiled-float16; do
     command+="; $(profile_case_command "${target}") || profile_status=1"
   done
   command+="; exit \${profile_status}"
@@ -564,6 +587,11 @@ print_plan() {
   printf '  Terraform variables: %s\n' "${TF_VARS_FILE}"
   printf '  Raw results: %s\n' "${RESULT_DIR}"
   printf '  Report: %s\n' "${REPORT_PATH}"
+  if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
+    printf '  Matmul sweep: enabled\n'
+  elif [[ "${INCLUDE_MATMUL}" == "1" ]]; then
+    printf '  Matmul baseline: enabled\n'
+  fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"
     printf '  Nsight Compute exports: %s\n' "${PROFILE_EXPORT_DIR}"

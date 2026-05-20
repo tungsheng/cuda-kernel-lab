@@ -94,16 +94,28 @@ disposable GPU session:
 ./scripts/live-benchmark --run-id <run-id>
 ```
 
-Add `--include-matmul` when you want tiled matmul progression numbers in the
-same run directory. When running the matrix manually, pass
-`--include-vector-add-sweep --include-reduction-sweep` and the same
-`--output-dir experiments/results/aws-ec2/<run-id>`.
+Add `--include-matmul` when you want the default tiled matmul progression
+numbers in the same run directory. Add `--include-matmul-sweep` when you want
+the float16 tile-shape strategy sweep that moves the evidence track toward
+Tensor Core validation:
+
+```bash
+uv run benchmark-matrix \
+  --output-dir experiments/results/aws-ec2/<run-id> \
+  --include-matmul-sweep
+```
+
+When running the matrix manually, pass
+`--include-vector-add-sweep --include-reduction-sweep --include-matmul-sweep`
+and the same `--output-dir experiments/results/aws-ec2/<run-id>`.
 
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
 runs, `512` and `2048`, to the run's `vector-add-block-size.jsonl`. It also
 appends the non-default `reduction_sum` strategy comparison to
-`reduction-strategy.jsonl`.
+`reduction-strategy.jsonl`. The matmul sweep appends additional float16 tile
+shape variants to `matmul-tile-shape.jsonl` while keeping the default matmul
+baseline in `matmul.jsonl`.
 
 ## Save Results
 

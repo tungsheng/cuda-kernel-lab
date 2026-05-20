@@ -28,6 +28,12 @@ This also writes Nsight Compute CSV exports under
 `profiling/nsight_compute/<run-id>/` and compact profiler notes under
 `profiling/reports/<run-id>/`.
 
+For the matmul/Tensor Core track, include the focused tile-shape sweep:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
+```
+
 Manual live-GPU matrix collection:
 
 ```bash

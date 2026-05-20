@@ -43,8 +43,15 @@ Add matmul progression numbers when needed:
 ./scripts/live-benchmark --run-id <run-id> --include-matmul
 ```
 
-Capture focused Nsight Compute evidence for the current memory bottleneck and a
-known fused-kernel win:
+Collect the next recommended matmul evidence set, including the float16
+tile-shape sweep and a focused matmul Nsight Compute profile:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
+```
+
+Capture focused Nsight Compute evidence for the current memory bottleneck, a
+known fused-kernel win, and the current matmul tiled-dot target:
 
 ```bash
 ./scripts/live-benchmark --run-id <run-id> --with-profiling
@@ -72,7 +79,8 @@ cd ~/cuda-kernel-lab
 uv run benchmark-matrix \
   --output-dir experiments/results/aws-ec2/<run-id> \
   --include-vector-add-sweep \
-  --include-reduction-sweep
+  --include-reduction-sweep \
+  --include-matmul-sweep
 uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ./scripts/down
 ```
@@ -110,6 +118,7 @@ Prefer `--with-profiling` for disposable evidence runs. It captures:
 - `memory-reduction-iterative-float32`
 - `memory-reduction-two-pass-float32`
 - `norms-rmsnorm-float16`
+- `matmul-tiled-float16`
 
 The wrapper runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

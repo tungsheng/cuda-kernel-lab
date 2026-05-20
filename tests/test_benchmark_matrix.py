@@ -125,6 +125,34 @@ def test_matrix_can_include_matmul_progression() -> None:
     ) in command_lines
 
 
+def test_matrix_can_include_matmul_strategy_sweep() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_matmul_sweep=True,
+        matmul_sweep_tile_shapes=((16, 16, 32), (16, 32, 32), (32, 16, 32)),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+    sweep_lines = [line for line in command_lines if "matmul-tile-shape.jsonl" in line]
+
+    assert len(entries) == 12
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024 "
+        "--dtype float32 --block-m 16 --block-n 16 --block-k 32 "
+        "--warmup 25 --iterations 100 --output results/matmul.jsonl"
+    ) in command_lines
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024 "
+        "--dtype float16 --block-m 16 --block-n 32 --block-k 32 "
+        "--warmup 25 --iterations 100 --output results/matmul-tile-shape.jsonl"
+    ) in sweep_lines
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024 "
+        "--dtype float16 --block-m 32 --block-n 16 --block-k 32 "
+        "--warmup 25 --iterations 100 --output results/matmul-tile-shape.jsonl"
+    ) in sweep_lines
+    assert all("--block-m 16 --block-n 16 --block-k 32" not in line for line in sweep_lines)
+
+
 def test_dry_run_prints_without_executing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -161,6 +189,12 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="matmul block sizes"):
         benchmark_matrix.build_matrix(matmul_block_m=0)
 
+    with pytest.raises(ValueError, match="matmul_sweep_tile_shapes"):
+        benchmark_matrix.build_matrix(matmul_sweep_tile_shapes=((16, 16),))
+
+    with pytest.raises(ValueError, match="matmul_sweep_tile_shapes"):
+        benchmark_matrix.build_matrix(matmul_sweep_tile_shapes=((16, 16, 0),))
+
     with pytest.raises(ValueError, match="vector_add_sweep_block_sizes"):
         benchmark_matrix.build_matrix(vector_add_sweep_block_sizes=(512, 0))
 
@@ -168,7 +202,7 @@ def test_matrix_rejects_invalid_timing_values() -> None:
         benchmark_matrix.build_matrix(reduction_strategy="")
 
 
-def test_matrix_parses_vector_add_sweep_block_sizes(
+def test_matrix_parses_strategy_sweep_values(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     benchmark_matrix.main(
@@ -183,6 +217,9 @@ def test_matrix_parses_vector_add_sweep_block_sizes(
             "--reduction-sweep-strategies",
             "iterative,two_pass",
             "--include-matmul",
+            "--include-matmul-sweep",
+            "--matmul-sweep-tile-shapes",
+            "16x32x32,32x16x32",
         ]
     )
 
@@ -194,3 +231,6 @@ def test_matrix_parses_vector_add_sweep_block_sizes(
     assert "results/reduction-strategy.jsonl" in output
     assert "uv run benchmark-matmul" in output
     assert "results/matmul.jsonl" in output
+    assert "results/matmul-tile-shape.jsonl" in output
+    assert "--block-m 16 --block-n 32 --block-k 32" in output
+    assert "--block-m 32 --block-n 16 --block-k 32" in output

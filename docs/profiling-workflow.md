@@ -51,6 +51,7 @@ sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-matmul --backend triton --device cuda \
   --m 1024 --n 1024 --k 1024 --dtype float16 \
+  --block-m 32 --block-n 32 --block-k 32 \
   --output experiments/results/aws-ec2/<run-id>-profiled/matmul-profiled.jsonl
 ```
 
@@ -77,6 +78,7 @@ uv run nsight-summary \
 - occupancy and launch configuration
 - register pressure
 - shared memory usage
+- Tensor Core or tensor-pipe utilization for matmul
 - cache behavior when parameter vectors are reused
 - whether measured traffic agrees with the analytical model
 

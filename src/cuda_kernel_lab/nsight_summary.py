@@ -19,6 +19,12 @@ KEY_METRICS = {
     "launch__registers_per_thread": "Registers per thread",
     "launch__shared_mem_per_block_static": "Static shared memory per block",
     "launch__shared_mem_per_block_dynamic": "Dynamic shared memory per block",
+    "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active": "Tensor pipe utilization",
+    "sm__pipe_tensor_op_hmma_cycles_active.avg.pct_of_peak_sustained_active": (
+        "Tensor Core utilization"
+    ),
+    "smsp__inst_executed_pipe_tensor.sum": "Tensor pipe instructions",
+    "smsp__sass_thread_inst_executed_op_hmma_pred_on.sum": "HMMA instructions",
 }
 
 

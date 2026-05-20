@@ -36,9 +36,10 @@ def test_parse_metrics_reads_wide_nsight_raw_csv(tmp_path: Path) -> None:
                 "==PROF== Connected to process",
                 '"ID","Kernel Name","gpu__time_duration.sum",'
                 '"gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",'
-                '"dram__bytes_read.sum","launch__registers_per_thread"',
-                '"","","ns","%","byte","register/thread"',
-                '"0","_vector_add_kernel","419072","92.10","154414208","26"',
+                '"dram__bytes_read.sum","launch__registers_per_thread",'
+                '"sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active"',
+                '"","","ns","%","byte","register/thread","%"',
+                '"0","_vector_add_kernel","419072","92.10","154414208","26","18.5"',
             ]
         ),
         encoding="utf-8",
@@ -51,6 +52,7 @@ def test_parse_metrics_reads_wide_nsight_raw_csv(tmp_path: Path) -> None:
         ("DRAM throughput", "92.10", "%"),
         ("DRAM bytes read", "154414208", "byte"),
         ("Registers per thread", "26", "register/thread"),
+        ("Tensor pipe utilization", "18.5", "%"),
     ]
 
 
