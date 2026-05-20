@@ -76,6 +76,8 @@ temp/
 *.qdrep
 *.sqlite
 *.sqlite3
+profiling/nsight_compute/*
+!profiling/nsight_compute/README.md
 profiling/**/captures/
 profiling/**/raw/
 benchmarks/results/
