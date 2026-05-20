@@ -74,6 +74,7 @@ TEMP_KEY_CREATED=0
 
 SSH_USER="ubuntu"
 REMOTE_DIR="cuda-kernel-lab"
+INGRESS_CIDR=""
 OUTPUT_ROOT="experiments/results/aws-ec2"
 REPORT_ROOT="experiments/reports/aws-ec2"
 INCLUDE_MATMUL=0
@@ -121,6 +122,7 @@ Options:
   --include-matmul          Include the tiled matmul progression in the matrix.
   --include-matmul-sweep    Include the float16 matmul tile-shape strategy sweep.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
+  --ingress-cidr <cidr>     SSH source CIDR. Default: auto-discover public IP /32.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
   --ssh-user <name>         SSH user. Default: ${SSH_USER}
@@ -219,6 +221,11 @@ parse_args() {
       --with-profiling)
         PROFILE=1
         shift
+        ;;
+      --ingress-cidr)
+        require_value "$1" "${2:-}"
+        INGRESS_CIDR=${2:-}
+        shift 2
         ;;
       *)
         die "unknown argument: $1"
@@ -339,6 +346,9 @@ up_command() {
     --tf-dir "${TF_DIR}"
     --tf-vars-file "${TF_VARS_FILE}"
   )
+  if [[ -n "${INGRESS_CIDR}" ]]; then
+    cmd+=(--ingress-cidr "${INGRESS_CIDR}")
+  fi
   if [[ -n "${AWS_PROFILE_NAME}" ]]; then
     cmd+=(--profile "${AWS_PROFILE_NAME}")
   fi
@@ -577,6 +587,11 @@ print_plan() {
     printf '  AWS profile: %s\n' "${AWS_PROFILE_NAME}"
   fi
   printf '  Instance: %s\n' "${INSTANCE_TYPE}"
+  if [[ -n "${INGRESS_CIDR}" ]]; then
+    printf '  SSH ingress: %s\n' "${INGRESS_CIDR}"
+  else
+    printf '  SSH ingress: auto-discovered public IP /32\n'
+  fi
   if [[ "${CREATE_TEMP_KEY}" == "1" ]]; then
     printf '  EC2 key pair: temporary %s\n' "${KEY_NAME}"
     printf '  Local private key: %s (deleted after run)\n' "${KEY_FILE}"

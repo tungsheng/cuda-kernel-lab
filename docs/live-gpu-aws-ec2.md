@@ -37,6 +37,13 @@ Run the full benchmark:
 ./scripts/live-benchmark --run-id <run-id>
 ```
 
+If SSH times out on a network where HTTPS and SSH use different carrier NAT
+egress addresses, override the auto-discovered `/32` with the SSH-visible CIDR:
+
+```bash
+./scripts/live-benchmark --run-id <run-id> --ingress-cidr <ssh-egress-cidr>
+```
+
 Add matmul progression numbers when needed:
 
 ```bash
@@ -138,3 +145,16 @@ sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
 ```
 
 Save compact profiler notes under `profiling/reports/`.
+
+## SSH Timeout Troubleshooting
+
+`scripts/up` discovers the default SSH ingress CIDR with
+`https://checkip.amazonaws.com` and opens only that IPv4 `/32`. Some networks
+route HTTPS discovery and TCP/22 through different NAT addresses. In that case
+the EC2 instance boots normally, `sshd` starts, but SSH attempts time out
+because the security group never sees traffic from the discovered `/32`.
+
+Use `./scripts/up --ingress-cidr <cidr>` or
+`./scripts/live-benchmark --ingress-cidr <cidr>` when your SSH egress address is
+known to differ from HTTPS discovery. Keep the CIDR as narrow as your network
+allows; avoid opening SSH broadly.

@@ -403,16 +403,28 @@ ssh_remote() {
 
 wait_for_ssh() {
   local deadline
+  local last_error=""
+  local output
 
   [[ -n "${SSH_HOST}" ]] || die "Terraform output did not include an SSH host"
 
   deadline=$((SECONDS + 600))
   while ((SECONDS < deadline)); do
-    if ssh_remote 'echo ready' >/dev/null 2>&1; then
+    if output=$(ssh_remote 'echo ready' 2>&1); then
       return 0
     fi
+    last_error=${output}
     sleep 10
   done
+
+  printf 'SSH did not become reachable before timeout.\n' >&2
+  printf '  Host: %s@%s\n' "${SSH_USER}" "${SSH_HOST}" >&2
+  printf '  Configured ingress CIDR: %s\n' "${INGRESS_CIDR:-unknown}" >&2
+  if [[ -n "${last_error}" ]]; then
+    printf '  Last ssh error: %s\n' "${last_error}" >&2
+  fi
+  printf 'If the last error is an operation timeout, the most likely cause is source NAT mismatch: the HTTPS public-IP discovery used for the default /32 rule can differ from the IP AWS sees for SSH.\n' >&2
+  printf 'Retry with --ingress-cidr set to the observed SSH NAT range or run from a network with stable egress IP.\n' >&2
 
   die "timed out waiting for SSH on ${SSH_USER}@${SSH_HOST}"
 }
