@@ -481,7 +481,7 @@ def _interpretation_lines(rows: list[ReportRow]) -> list[str]:
     first_run = rows[0].run
     if not first_run.get("git_commit") or first_run.get("git_dirty") is None:
         lines.append(
-            "- Source git metadata is missing; use `scripts/live-benchmark` or export "
+            "- Source git metadata is missing; use `scripts/benchmark` or export "
             "`CUDA_KERNEL_LAB_GIT_COMMIT` and `CUDA_KERNEL_LAB_GIT_DIRTY` for SSH/tar runs."
         )
 

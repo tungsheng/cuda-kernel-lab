@@ -101,11 +101,13 @@ uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 small sweeps into the same run directory when they belong to the same evidence
 note.
 
-For AWS EC2 evidence, collect the baseline matrix and strategy sweeps in one
-disposable GPU session:
+For AWS EC2 evidence, start one host, run the benchmark matrix, and tear the
+host down after you finish the experiment batch:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id>
+./scripts/up
+./scripts/benchmark --run-id <run-id>
+./scripts/down
 ```
 
 Add `--include-matmul` when you want the default tiled matmul progression

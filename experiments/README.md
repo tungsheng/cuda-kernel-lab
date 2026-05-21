@@ -12,7 +12,9 @@ uv run benchmark-memory --backend all --device cuda --op all --output experiment
 Live-GPU evidence run on disposable AWS EC2:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id>
+./scripts/up
+./scripts/benchmark --run-id <run-id>
+./scripts/down
 ```
 
 This writes raw JSONL under `experiments/results/aws-ec2/<run-id>/` and a
@@ -21,7 +23,7 @@ compact report under `experiments/reports/aws-ec2/<run-id>.md`.
 Add profiler evidence when the benchmark report points at a specific bottleneck:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --with-profiling
+./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
 This also writes Nsight Compute CSV exports under
@@ -31,7 +33,7 @@ This also writes Nsight Compute CSV exports under
 For the matmul/Tensor Core track, include the focused tile-shape sweep:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
+./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
 Manual live-GPU matrix collection:

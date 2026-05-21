@@ -3,13 +3,20 @@
 This environment creates the disposable single-node EC2 GPU host used for CUDA
 Kernel Lab benchmark evidence.
 
-Use the end-to-end wrapper for benchmark evidence:
+Use the host lifecycle scripts for benchmark evidence:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id>
+./scripts/up
+./scripts/benchmark --run-id <run-id>
+./scripts/down
 ```
 
-Use the host lifecycle scripts when you want to inspect the instance manually:
+The default `./scripts/up` creates or reuses a project-local EC2 key pair and
+private key under `.aws-gpu/keys/`, then writes `.aws-gpu/connection.env` for
+`./scripts/benchmark`.
+
+Use explicit key arguments only when you want to align with an existing EC2 key
+pair:
 
 ```bash
 ./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
@@ -17,8 +24,8 @@ Use the host lifecycle scripts when you want to inspect the instance manually:
 ```
 
 Like the GPU nodes in `gpu-inference-lab`, this environment can launch without
-an EC2 SSH key. Omit `--key-name` and `--key-file` for an infra-only host; pass
-both only when you want SSH bootstrap.
+an EC2 SSH key. Use `./scripts/up --skip-bootstrap` for an infra-only host
+without SSH bootstrap.
 
 Use Terraform directly when you want to inspect or customize the plan:
 

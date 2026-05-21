@@ -1,9 +1,8 @@
 # Live GPU On AWS EC2
 
-Use AWS EC2 for disposable single-GPU benchmark evidence. The normal path is
-one command: create a temporary EC2 key pair, launch a `g5.xlarge`, run the
-benchmark matrix, copy artifacts back, destroy Terraform resources, and delete
-the temporary key.
+Use AWS EC2 for disposable single-GPU benchmark evidence. The normal path is a
+three-step loop: start a `g5.xlarge`, run one or more benchmark experiments, and
+tear the host down when you are done.
 
 ## Defaults
 
@@ -25,29 +24,53 @@ the temporary key.
 
 ## Recommended Flow
 
-Preview the plan without touching AWS:
+Preview the host launch without touching AWS:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --dry-run
+./scripts/up --dry-run
 ```
 
-Run the full benchmark:
+Start the GPU host. With no key arguments, `scripts/up` creates or reuses the
+default project key at `.aws-gpu/keys/cuda-kernel-lab-${USER}.pem` and writes
+connection metadata to `.aws-gpu/connection.env`.
 
 ```bash
-./scripts/live-benchmark --run-id <run-id>
+./scripts/up
+```
+
+Run a benchmark against the host:
+
+```bash
+./scripts/benchmark --run-id <run-id>
+```
+
+Run more benchmark experiments without another Terraform apply/destroy cycle:
+
+```bash
+./scripts/benchmark --run-id <second-run-id> --include-matmul-sweep
+```
+
+If you edit local kernels or benchmark code while the host is still running,
+rerun `./scripts/up` to resync and re-bootstrap the remote repo before the next
+`./scripts/benchmark`.
+
+Tear the host down:
+
+```bash
+./scripts/down
 ```
 
 If SSH times out on a network where HTTPS and SSH use different carrier NAT
 egress addresses, override the auto-discovered `/32` with the SSH-visible CIDR:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --ingress-cidr <ssh-egress-cidr>
+./scripts/up --ingress-cidr <ssh-egress-cidr>
 ```
 
 Add matmul progression numbers when needed:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --include-matmul
+./scripts/benchmark --run-id <run-id> --include-matmul
 ```
 
 Collect the next recommended matmul evidence set, including the float16
@@ -55,24 +78,25 @@ tile-shape plus launch-configuration sweep and a focused matmul Nsight Compute
 profile:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
+./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
 Capture focused Nsight Compute evidence for the current memory bottleneck, a
 known fused-kernel win, and the current matmul tiled-dot target:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --with-profiling
+./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
 Use an existing EC2 key pair only when you need to keep SSH access aligned with
 your own key inventory:
 
 ```bash
-./scripts/live-benchmark \
-  --run-id <run-id> \
+./scripts/up \
   --key-name <key-pair-name> \
   --key-file <key-file.pem>
+./scripts/benchmark --run-id <run-id> --key-file <key-file.pem>
+./scripts/down
 ```
 
 ## Manual Host Flow
@@ -81,8 +105,8 @@ Use `scripts/up` and `scripts/down` when you want to inspect or operate the host
 manually:
 
 ```bash
-./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
-ssh -i <key-file.pem> ubuntu@<public-ip>
+./scripts/up
+ssh -i .aws-gpu/keys/cuda-kernel-lab-${USER}.pem ubuntu@<public-ip>
 cd ~/cuda-kernel-lab
 uv run benchmark-matrix \
   --output-dir experiments/results/aws-ec2/<run-id> \
@@ -101,7 +125,7 @@ plan:
 terraform -chdir=infra/env/aws-gpu init
 terraform -chdir=infra/env/aws-gpu plan \
   -out tfplan \
-  -var 'key_name=<key-pair-name>' \
+  -var 'key_name=cuda-kernel-lab-${USER}' \
   -var 'ssh_ingress_cidr=<your-ip>/32'
 terraform -chdir=infra/env/aws-gpu apply tfplan
 terraform -chdir=infra/env/aws-gpu destroy
@@ -109,18 +133,18 @@ terraform -chdir=infra/env/aws-gpu destroy
 
 ## Cleanup Verification
 
-After a live run, confirm local Terraform state is empty:
+After `./scripts/down`, confirm local Terraform state is empty:
 
 ```bash
 terraform -chdir=infra/env/aws-gpu state list
 ```
 
-The live wrapper also removes its run-specific tfvars file and temporary private
-key under `.aws-gpu/live-benchmark/`.
+The reusable dev key under `.aws-gpu/keys/` is left in place for the next
+`./scripts/up`.
 
 ## Profiler Starting Point
 
-Prefer `--with-profiling` for disposable evidence runs. It captures:
+Prefer `--with-profiling` when a benchmark needs profiler evidence. It captures:
 
 - `memory-vector-add-float32`
 - `memory-reduction-iterative-float32`
@@ -132,7 +156,7 @@ The matmul target uses the current Tensor Core candidate launch settings from
 the benchmark CLI and should be read alongside the `--include-matmul-sweep`
 rows before promoting a final tile choice.
 
-The wrapper runs `ncu` through passwordless `sudo` because NVIDIA performance
+The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.
 
 For manual host work, start with the memory bottleneck and the strongest fused
@@ -159,7 +183,6 @@ route HTTPS discovery and TCP/22 through different NAT addresses. In that case
 the EC2 instance boots normally, `sshd` starts, but SSH attempts time out
 because the security group never sees traffic from the discovered `/32`.
 
-Use `./scripts/up --ingress-cidr <cidr>` or
-`./scripts/live-benchmark --ingress-cidr <cidr>` when your SSH egress address is
-known to differ from HTTPS discovery. Keep the CIDR as narrow as your network
-allows; avoid opening SSH broadly.
+Use `./scripts/up --ingress-cidr <cidr>` when your SSH egress address is known
+to differ from HTTPS discovery. Keep the CIDR as narrow as your network allows;
+avoid opening SSH broadly.

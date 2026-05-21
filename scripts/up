@@ -68,7 +68,9 @@ if [[ -n "${CUDA_KERNEL_LAB_TF_VARS_FILE:-}" ]]; then
 else
   TF_VARS_FILE_EXPLICIT=0
 fi
-STATE_DIR="${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}"
+STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}")
+KEY_DIR="${STATE_DIR}/keys"
+CONNECTION_FILE="${STATE_DIR}/connection.env"
 
 AWS_REGION_NAME="${AWS_REGION:-us-west-2}"
 AWS_PROFILE_NAME="${AWS_PROFILE:-}"
@@ -81,6 +83,7 @@ REMOTE_DIR="cuda-kernel-lab"
 
 KEY_NAME=""
 KEY_FILE=""
+DEFAULT_KEY_MANAGED=0
 SUBNET_ID=""
 VPC_ID=""
 SECURITY_GROUP_ID=""
@@ -97,14 +100,15 @@ SSH_HOST=""
 usage() {
   cat <<EOF
 Usage:
-  ./scripts/up [--key-name <ec2-key-pair> --key-file <path-to-pem>]
+  ./scripts/up [options]
 
 Creates one disposable AWS EC2 GPU host for CUDA benchmark runs, then syncs
-this repo and bootstraps the benchmark environment when --key-file is provided.
+this repo and bootstraps the benchmark environment. When no key is provided,
+the script creates or reuses a project-local dev key under .aws-gpu/keys/.
 
 Options:
-  --key-name <name>             EC2 key pair name. Required for SSH/bootstrap.
-  --key-file <path>             SSH private key. Enables repo sync/bootstrap.
+  --key-name <name>             EC2 key pair name override. Requires --key-file for bootstrap.
+  --key-file <path>             SSH private key override. Requires --key-name.
   --profile <name>              AWS CLI profile used by Terraform.
   --region <name>               AWS region. Default: ${AWS_REGION_NAME}
   --instance-type <type>        EC2 GPU instance. Default: ${INSTANCE_TYPE}
@@ -126,6 +130,7 @@ Options:
   --tf-vars-file <path>         Terraform variable file. Default: ${TF_VARS_FILE}
 
 Examples:
+  ./scripts/up
   ./scripts/up --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
   ./scripts/up --profile personal --instance-type g6.xlarge --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
   ./scripts/up --skip-bootstrap
@@ -147,7 +152,7 @@ parse_args() {
         ;;
       --key-file)
         require_value "$1" "${2:-}"
-        KEY_FILE=$(expand_path "${2:-}")
+        KEY_FILE=$(absolute_path "${2:-}")
         shift 2
         ;;
       --profile)
@@ -253,16 +258,36 @@ parse_args() {
   done
 }
 
+default_key_suffix() {
+  local suffix
+
+  suffix=${USER:-$(id -un 2>/dev/null || printf 'user')}
+  suffix=${suffix//[^A-Za-z0-9._-]/-}
+  printf '%s\n' "${suffix}"
+}
+
+resolve_default_key() {
+  if [[ -z "${KEY_NAME}" && -z "${KEY_FILE}" && "${SKIP_BOOTSTRAP}" == "0" ]]; then
+    DEFAULT_KEY_MANAGED=1
+    KEY_NAME="cuda-kernel-lab-$(default_key_suffix)"
+    KEY_FILE="${KEY_DIR}/${KEY_NAME}.pem"
+  fi
+}
+
 check_prereqs() {
   if [[ "${DRY_RUN}" == "0" ]]; then
     require_commands terraform
   fi
 
-  if ssh_access_requested && [[ -z "${SECURITY_GROUP_ID}" && -z "${INGRESS_CIDR}" ]]; then
+  if [[ "${DRY_RUN}" == "0" && "${DEFAULT_KEY_MANAGED}" == "1" ]]; then
+    require_commands aws ssh-keygen
+  fi
+
+  if [[ "${DRY_RUN}" == "0" ]] && ssh_access_requested && [[ -z "${SECURITY_GROUP_ID}" && -z "${INGRESS_CIDR}" ]]; then
     require_commands curl
   fi
 
-  if [[ "${SKIP_BOOTSTRAP}" == "0" && -n "${KEY_FILE}" ]]; then
+  if [[ "${DRY_RUN}" == "0" && "${SKIP_BOOTSTRAP}" == "0" && -n "${KEY_FILE}" ]]; then
     require_commands ssh tar
   fi
 }
@@ -280,7 +305,7 @@ validate_inputs() {
   [[ "${REMOTE_DIR}" != /* && "${REMOTE_DIR}" != *..* ]] || die "--remote-dir must be a relative path without '..'"
   [[ "${REMOTE_DIR}" != "." && "${REMOTE_DIR}" != .* && "${REMOTE_DIR}" != */.* ]] || die "--remote-dir must not target hidden or current-directory paths"
 
-  if [[ -n "${KEY_FILE}" && ! -f "${KEY_FILE}" ]]; then
+  if [[ "${DEFAULT_KEY_MANAGED}" == "0" && -n "${KEY_FILE}" && ! -f "${KEY_FILE}" ]]; then
     die "SSH key file does not exist: ${KEY_FILE}"
   fi
 
@@ -302,6 +327,10 @@ resolve_ingress_cidr() {
   fi
 
   if ! ssh_access_requested; then
+    return
+  fi
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
     return
   fi
 
@@ -374,6 +403,76 @@ write_tfvars() {
   } > "${TF_VARS_FILE}"
 }
 
+aws_key_pair_exists() {
+  local output
+
+  if output=$(aws ec2 describe-key-pairs \
+    --key-names "${KEY_NAME}" \
+    --region "${AWS_REGION_NAME}" 2>&1); then
+    return 0
+  fi
+
+  if [[ "${output}" == *"InvalidKeyPair.NotFound"* ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${output}" >&2
+  die "failed to inspect EC2 key pair: ${KEY_NAME}"
+}
+
+create_default_key_pair() {
+  print_stage "creating default EC2 key pair"
+  mkdir -p "${KEY_DIR}"
+  if ! aws ec2 create-key-pair \
+    --key-name "${KEY_NAME}" \
+    --region "${AWS_REGION_NAME}" \
+    --query KeyMaterial \
+    --output text > "${KEY_FILE}"; then
+    rm -f "${KEY_FILE}"
+    die "failed to create EC2 key pair: ${KEY_NAME}"
+  fi
+  chmod 600 "${KEY_FILE}"
+}
+
+import_default_key_pair() {
+  local public_key_file
+
+  print_stage "importing default EC2 key pair from local private key"
+  public_key_file=$(mktemp)
+  if ! ssh-keygen -y -f "${KEY_FILE}" > "${public_key_file}"; then
+    rm -f "${public_key_file}"
+    die "could not derive a public key from ${KEY_FILE}; remove the stale key or pass --key-name and --key-file"
+  fi
+  if ! aws ec2 import-key-pair \
+    --key-name "${KEY_NAME}" \
+    --region "${AWS_REGION_NAME}" \
+    --public-key-material "fileb://${public_key_file}" >/dev/null; then
+    rm -f "${public_key_file}"
+    die "failed to import EC2 key pair: ${KEY_NAME}"
+  fi
+  rm -f "${public_key_file}"
+  chmod 600 "${KEY_FILE}"
+}
+
+ensure_default_key_pair() {
+  [[ "${DEFAULT_KEY_MANAGED}" == "1" && "${DRY_RUN}" == "0" ]] || return 0
+
+  if [[ -f "${KEY_FILE}" ]]; then
+    chmod 600 "${KEY_FILE}"
+    if aws_key_pair_exists; then
+      return 0
+    fi
+    import_default_key_pair
+    return 0
+  fi
+
+  if aws_key_pair_exists; then
+    die "EC2 key pair ${KEY_NAME} already exists, but local private key is missing: ${KEY_FILE}. AWS cannot re-download private key material; pass --key-name/--key-file, choose another key name, or delete the stale EC2 key pair and rerun."
+  fi
+
+  create_default_key_pair
+}
+
 terraform_output() {
   terraform -chdir="${TF_DIR}" output -raw "$1"
 }
@@ -381,6 +480,32 @@ terraform_output() {
 load_outputs() {
   INSTANCE_ID=$(terraform_output instance_id)
   SSH_HOST=$(terraform_output ssh_host 2>/dev/null || true)
+}
+
+write_env_var() {
+  local name=$1
+  local value=$2
+
+  printf '%s=' "${name}"
+  printf '%q' "${value}"
+  printf '\n'
+}
+
+write_connection_metadata() {
+  mkdir -p "${STATE_DIR}"
+  {
+    write_env_var "KEY_NAME" "${KEY_NAME}"
+    write_env_var "KEY_FILE" "${KEY_FILE}"
+    write_env_var "SSH_USER" "${SSH_USER}"
+    write_env_var "REMOTE_DIR" "${REMOTE_DIR}"
+    write_env_var "TF_DIR" "${TF_DIR}"
+    write_env_var "TF_VARS_FILE" "${TF_VARS_FILE}"
+    write_env_var "AWS_REGION_NAME" "${AWS_REGION_NAME}"
+    write_env_var "AWS_PROFILE_NAME" "${AWS_PROFILE_NAME}"
+    write_env_var "INSTANCE_ID" "${INSTANCE_ID}"
+    write_env_var "SSH_HOST" "${SSH_HOST}"
+  } > "${CONNECTION_FILE}"
+  chmod 600 "${CONNECTION_FILE}"
 }
 
 ssh_base_args=()
@@ -516,9 +641,23 @@ print_launch_summary() {
   if [[ -n "${SECURITY_GROUP_ID}" ]]; then
     printf '  Security group: %s\n' "${SECURITY_GROUP_ID}"
   elif ssh_access_requested; then
-    printf '  SSH ingress: %s\n' "${INGRESS_CIDR}"
+    if [[ -n "${INGRESS_CIDR}" ]]; then
+      printf '  SSH ingress: %s\n' "${INGRESS_CIDR}"
+    elif [[ "${DRY_RUN}" == "1" ]]; then
+      printf '  SSH ingress: auto-discovered public IP /32\n'
+    else
+      printf '  SSH ingress: pending public IP discovery\n'
+    fi
   else
     printf '  SSH ingress: closed by default; no EC2 key pair requested\n'
+  fi
+  if ssh_access_requested; then
+    if [[ "${DEFAULT_KEY_MANAGED}" == "1" ]]; then
+      printf '  EC2 key pair: %s (managed default)\n' "${KEY_NAME}"
+    else
+      printf '  EC2 key pair: %s\n' "${KEY_NAME}"
+    fi
+    printf '  SSH key file: %s\n' "${KEY_FILE}"
   fi
   printf '  Bootstrap: %s\n' "$(bootstrap_label)"
   printf '  Terraform: %s\n' "${TF_DIR}"
@@ -535,7 +674,8 @@ print_ready() {
   if [[ -n "${SSH_HOST}" && -n "${KEY_FILE}" ]]; then
     printf '  SSH: ssh -i %q %s@%s\n' "${KEY_FILE}" "${SSH_USER}" "${SSH_HOST}"
     printf '  Repo: ~/%s\n' "${REMOTE_DIR}"
-    printf '  Benchmark: cd ~/%s && uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep\n' "${REMOTE_DIR}"
+    printf '  Connection metadata: %s\n' "${CONNECTION_FILE}"
+    printf '  Benchmark: ./scripts/benchmark --run-id <run-id>\n'
   elif [[ -n "${SSH_HOST}" && -n "${KEY_NAME}" ]]; then
     printf '  SSH host: %s@%s\n' "${SSH_USER}" "${SSH_HOST}"
     printf '  SSH key: use the private key for EC2 key pair %s\n' "${KEY_NAME}"
@@ -550,11 +690,14 @@ print_ready() {
 
 main() {
   parse_args "$@"
+  resolve_default_key
   validate_inputs
   check_prereqs
   if [[ -n "${AWS_PROFILE_NAME}" ]]; then
     export AWS_PROFILE="${AWS_PROFILE_NAME}"
   fi
+
+  ensure_default_key_pair
 
   print_stage "resolving SSH ingress input"
   resolve_ingress_cidr
@@ -580,6 +723,7 @@ main() {
   terraform -chdir="${TF_DIR}" apply "${apply_args[@]}"
 
   load_outputs
+  write_connection_metadata
 
   if [[ "${SKIP_BOOTSTRAP}" == "0" ]]; then
     print_stage "syncing repo and bootstrapping GPU benchmark environment"

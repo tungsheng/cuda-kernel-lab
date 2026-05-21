@@ -16,11 +16,11 @@ Record:
 
 ## Nsight Compute
 
-For the standard AWS evidence path, let the lifecycle wrapper collect focused
-profiles and compact summaries:
+For the standard AWS evidence path, start a host with `./scripts/up`, then let
+the benchmark script collect focused profiles and compact summaries:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --with-profiling
+./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
 Example command shape:

@@ -39,30 +39,34 @@ uv run benchmark-matrix --output-dir experiments/results/aws-ec2/<run-id>
 uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ```
 
-For the AWS evidence run, let the wrapper own the full lifecycle: temporary EC2
-key pair, Terraform apply, benchmark, artifact copyback, Terraform destroy, and
-key cleanup.
+For AWS evidence runs, start one GPU host, run as many benchmark experiments as
+you need, then tear it down. The first `up` creates or reuses a project-local
+SSH key under `.aws-gpu/keys/`.
 
 ```bash
-./scripts/live-benchmark --run-id <run-id>
+./scripts/up
+./scripts/benchmark --run-id <run-id>
+./scripts/down
 ```
 
-Add focused Nsight Compute profiler captures to the same disposable session:
+Add focused Nsight Compute profiler captures to a benchmark run:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --with-profiling
+./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
 Move into the matmul/Tensor Core track with the focused tile and launch sweep:
 
 ```bash
-./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
+./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
-Use lower-level commands only when you want to inspect the host manually:
+Use explicit key arguments only when you need to align with an existing EC2 key
+pair:
 
 ```bash
 ./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
+./scripts/benchmark --run-id <run-id> --key-file <key-file.pem>
 ./scripts/down
 ```
 

@@ -61,20 +61,20 @@ absolute_path() {
   fi
 }
 
-AWS_REGION_NAME="${AWS_REGION:-us-west-2}"
+STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}")
+CONNECTION_FILE=$(absolute_path "${CUDA_KERNEL_LAB_CONNECTION_FILE:-${STATE_DIR}/connection.env}")
+TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
+TF_VARS_FILE="${CUDA_KERNEL_LAB_TF_VARS_FILE:-}"
+
 AWS_PROFILE_NAME="${AWS_PROFILE:-}"
-INSTANCE_TYPE="g5.xlarge"
-INSTANCE_NAME=""
+AWS_PROFILE_ENV_SET=0
+if [[ -n "${AWS_PROFILE:-}" ]]; then
+  AWS_PROFILE_ENV_SET=1
+fi
 RUN_ID=""
-
-KEY_NAME=""
 KEY_FILE=""
-CREATE_TEMP_KEY=0
-TEMP_KEY_CREATED=0
-
 SSH_USER="ubuntu"
 REMOTE_DIR="cuda-kernel-lab"
-INGRESS_CIDR=""
 OUTPUT_ROOT="experiments/results/aws-ec2"
 REPORT_ROOT="experiments/reports/aws-ec2"
 INCLUDE_MATMUL=0
@@ -82,10 +82,12 @@ INCLUDE_MATMUL_SWEEP=0
 PROFILE=0
 DRY_RUN=0
 
-TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
-STATE_DIR="${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}"
-WORK_DIR=""
-TF_VARS_FILE=""
+KEY_FILE_SET=0
+SSH_USER_SET=0
+REMOTE_DIR_SET=0
+TF_DIR_SET=0
+TF_VARS_FILE_SET=0
+AWS_PROFILE_SET=0
 
 RESULT_DIR=""
 REPORT_PATH=""
@@ -97,45 +99,39 @@ GIT_DIRTY="unknown"
 SSH_HOST=""
 INSTANCE_ID=""
 
-TERRAFORM_TOUCHED=0
-CLEANUP_DONE=0
-
 ssh_base_args=()
 
 usage() {
   cat <<EOF
 Usage:
-  ./scripts/live-benchmark [options]
+  ./scripts/benchmark [options]
 
-Creates a disposable AWS EC2 GPU host, runs the live benchmark matrix, copies
-JSONL results and a Markdown report back into a run-id layout, then tears down
-the host and deletes any temporary EC2 key pair it created.
+Runs the benchmark matrix on the GPU host created by ./scripts/up, copies JSONL
+results and Markdown reports back locally, and leaves the host running for more
+experiments.
 
 Options:
   --run-id <id>             Result run id. Default: UTC timestamp.
-  --key-name <name>         Existing EC2 key pair name. Requires --key-file.
-  --key-file <path>         Existing SSH private key. Requires --key-name.
-  --profile <name>          AWS CLI profile used by AWS CLI and Terraform.
-  --region <name>           AWS region. Default: ${AWS_REGION_NAME}
-  --instance-type <type>    EC2 GPU instance. Default: ${INSTANCE_TYPE}
-  --name <name>             EC2 Name tag. Default: cuda-kernel-lab-<run-id>
+  --key-file <path>         SSH private key. Default: .aws-gpu/connection.env.
+  --profile <name>          AWS CLI profile used by Terraform output reads.
   --include-matmul          Include the tiled matmul progression in the matrix.
   --include-matmul-sweep    Include the float16 matmul tile and launch strategy sweep.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
-  --ingress-cidr <cidr>     SSH source CIDR. Default: auto-discover public IP /32.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
   --ssh-user <name>         SSH user. Default: ${SSH_USER}
   --remote-dir <path>       Remote repo directory. Default: ${REMOTE_DIR}
   --tf-dir <path>           Terraform environment. Default: ${TF_DIR}
-  --dry-run                 Print the planned workflow without touching AWS.
+  --tf-vars-file <path>     Terraform variable file label from ./scripts/up.
+  --connection-file <path>  Connection metadata file. Default: ${CONNECTION_FILE}
+  --dry-run                 Print the planned benchmark without SSH or Terraform.
 
 Examples:
-  ./scripts/live-benchmark
-  ./scripts/live-benchmark --run-id 2026-05-19-a10g-baseline
-  ./scripts/live-benchmark --run-id 2026-05-19-a10g-profile --with-profiling
-  ./scripts/live-benchmark --profile personal --instance-type g6.xlarge --include-matmul-sweep --with-profiling
-  ./scripts/live-benchmark --key-name kernel-lab --key-file ~/.ssh/kernel-lab.pem
+  ./scripts/up
+  ./scripts/benchmark --run-id 2026-05-21-a10g-baseline
+  ./scripts/benchmark --run-id 2026-05-21-a10g-profile --with-profiling
+  ./scripts/benchmark --run-id 2026-05-21-a10g-matmul --include-matmul-sweep
+  ./scripts/down
 EOF
 }
 
@@ -151,34 +147,16 @@ parse_args() {
         RUN_ID=${2:-}
         shift 2
         ;;
-      --key-name)
-        require_value "$1" "${2:-}"
-        KEY_NAME=${2:-}
-        shift 2
-        ;;
       --key-file)
         require_value "$1" "${2:-}"
         KEY_FILE=$(absolute_path "${2:-}")
+        KEY_FILE_SET=1
         shift 2
         ;;
       --profile)
         require_value "$1" "${2:-}"
         AWS_PROFILE_NAME=${2:-}
-        shift 2
-        ;;
-      --region)
-        require_value "$1" "${2:-}"
-        AWS_REGION_NAME=${2:-}
-        shift 2
-        ;;
-      --instance-type)
-        require_value "$1" "${2:-}"
-        INSTANCE_TYPE=${2:-}
-        shift 2
-        ;;
-      --name)
-        require_value "$1" "${2:-}"
-        INSTANCE_NAME=${2:-}
+        AWS_PROFILE_SET=1
         shift 2
         ;;
       --include-matmul)
@@ -187,6 +165,10 @@ parse_args() {
         ;;
       --include-matmul-sweep)
         INCLUDE_MATMUL_SWEEP=1
+        shift
+        ;;
+      --with-profiling)
+        PROFILE=1
         shift
         ;;
       --output-root)
@@ -202,36 +184,74 @@ parse_args() {
       --ssh-user)
         require_value "$1" "${2:-}"
         SSH_USER=${2:-}
+        SSH_USER_SET=1
         shift 2
         ;;
       --remote-dir)
         require_value "$1" "${2:-}"
         REMOTE_DIR=${2:-}
+        REMOTE_DIR_SET=1
         shift 2
         ;;
       --tf-dir)
         require_value "$1" "${2:-}"
         TF_DIR=$(absolute_path "${2:-}")
+        TF_DIR_SET=1
+        shift 2
+        ;;
+      --tf-vars-file)
+        require_value "$1" "${2:-}"
+        TF_VARS_FILE=$(absolute_path "${2:-}")
+        TF_VARS_FILE_SET=1
+        shift 2
+        ;;
+      --connection-file)
+        require_value "$1" "${2:-}"
+        CONNECTION_FILE=$(absolute_path "${2:-}")
         shift 2
         ;;
       --dry-run)
         DRY_RUN=1
         shift
         ;;
-      --with-profiling)
-        PROFILE=1
-        shift
-        ;;
-      --ingress-cidr)
-        require_value "$1" "${2:-}"
-        INGRESS_CIDR=${2:-}
-        shift 2
-        ;;
       *)
         die "unknown argument: $1"
         ;;
     esac
   done
+}
+
+load_connection_metadata() {
+  local cli_aws_profile_name=${AWS_PROFILE_NAME}
+  local cli_key_file=${KEY_FILE}
+  local cli_remote_dir=${REMOTE_DIR}
+  local cli_ssh_user=${SSH_USER}
+  local cli_tf_dir=${TF_DIR}
+  local cli_tf_vars_file=${TF_VARS_FILE}
+
+  if [[ -f "${CONNECTION_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONNECTION_FILE}"
+  fi
+
+  if [[ "${KEY_FILE_SET}" == "1" ]]; then
+    KEY_FILE=${cli_key_file}
+  fi
+  if [[ "${SSH_USER_SET}" == "1" ]]; then
+    SSH_USER=${cli_ssh_user}
+  fi
+  if [[ "${REMOTE_DIR_SET}" == "1" ]]; then
+    REMOTE_DIR=${cli_remote_dir}
+  fi
+  if [[ "${TF_DIR_SET}" == "1" ]]; then
+    TF_DIR=${cli_tf_dir}
+  fi
+  if [[ "${TF_VARS_FILE_SET}" == "1" ]]; then
+    TF_VARS_FILE=${cli_tf_vars_file}
+  fi
+  if [[ "${AWS_PROFILE_SET}" == "1" || "${AWS_PROFILE_ENV_SET}" == "1" ]]; then
+    AWS_PROFILE_NAME=${cli_aws_profile_name}
+  fi
 }
 
 validate_slug() {
@@ -262,27 +282,11 @@ resolve_defaults() {
   fi
   validate_slug "--run-id" "${RUN_ID}"
 
-  WORK_DIR="${STATE_DIR}/live-benchmark"
-  TF_VARS_FILE="${WORK_DIR}/${RUN_ID}.auto.tfvars"
   RESULT_DIR="${OUTPUT_ROOT}/${RUN_ID}"
   REPORT_PATH="${REPORT_ROOT}/${RUN_ID}.md"
   PROFILE_RESULT_DIR="${OUTPUT_ROOT}/${RUN_ID}-profiled"
   PROFILE_EXPORT_DIR="profiling/nsight_compute/${RUN_ID}"
   PROFILE_REPORT_DIR="profiling/reports/${RUN_ID}"
-
-  if [[ -z "${INSTANCE_NAME}" ]]; then
-    INSTANCE_NAME="cuda-kernel-lab-${RUN_ID}"
-  fi
-
-  if [[ -z "${KEY_NAME}" && -z "${KEY_FILE}" ]]; then
-    CREATE_TEMP_KEY=1
-    KEY_NAME="cuda-kernel-lab-${RUN_ID}"
-    KEY_FILE="${WORK_DIR}/${RUN_ID}.pem"
-  elif [[ -n "${KEY_NAME}" && -n "${KEY_FILE}" ]]; then
-    CREATE_TEMP_KEY=0
-  else
-    die "--key-name and --key-file must be provided together"
-  fi
 }
 
 validate_inputs() {
@@ -294,7 +298,10 @@ validate_inputs() {
   validate_relative_path "profile export directory" "${PROFILE_EXPORT_DIR}"
   validate_relative_path "profile report directory" "${PROFILE_REPORT_DIR}"
 
-  if [[ "${CREATE_TEMP_KEY}" == "0" && ! -f "${KEY_FILE}" ]]; then
+  if [[ -z "${KEY_FILE}" ]]; then
+    die "missing SSH key file; run ./scripts/up first or pass --key-file"
+  fi
+  if [[ "${DRY_RUN}" == "0" && ! -f "${KEY_FILE}" ]]; then
     die "SSH key file does not exist: ${KEY_FILE}"
   fi
 
@@ -328,46 +335,17 @@ collect_source_metadata() {
   fi
 }
 
+load_outputs() {
+  if ! SSH_HOST=$(terraform -chdir="${TF_DIR}" output -raw ssh_host 2>/dev/null); then
+    die "could not read Terraform ssh_host output; run ./scripts/up first"
+  fi
+  INSTANCE_ID=$(terraform -chdir="${TF_DIR}" output -raw instance_id 2>/dev/null || true)
+}
+
 print_command() {
   printf '  '
   printf '%q ' "$@"
   printf '\n'
-}
-
-up_command() {
-  local -a cmd
-  cmd=(
-    "${REPO_ROOT}/scripts/up"
-    --key-name "${KEY_NAME}"
-    --key-file "${KEY_FILE}"
-    --region "${AWS_REGION_NAME}"
-    --instance-type "${INSTANCE_TYPE}"
-    --name "${INSTANCE_NAME}"
-    --tf-dir "${TF_DIR}"
-    --tf-vars-file "${TF_VARS_FILE}"
-  )
-  if [[ -n "${INGRESS_CIDR}" ]]; then
-    cmd+=(--ingress-cidr "${INGRESS_CIDR}")
-  fi
-  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
-    cmd+=(--profile "${AWS_PROFILE_NAME}")
-  fi
-  printf '%s\0' "${cmd[@]}"
-}
-
-down_command() {
-  local -a cmd
-  cmd=(
-    "${REPO_ROOT}/scripts/down"
-    --region "${AWS_REGION_NAME}"
-    --tf-dir "${TF_DIR}"
-    --tf-vars-file "${TF_VARS_FILE}"
-    --remove-tfvars
-  )
-  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
-    cmd+=(--profile "${AWS_PROFILE_NAME}")
-  fi
-  printf '%s\0' "${cmd[@]}"
 }
 
 remote_benchmark_command() {
@@ -577,29 +555,24 @@ remote_profile_command() {
 }
 
 print_plan() {
-  printf '\nLive benchmark plan:\n'
+  printf '\nBenchmark plan:\n'
   if [[ "${DRY_RUN}" == "1" ]]; then
-    printf '  Mode: dry run; no AWS or Terraform commands will run\n'
+    printf '  Mode: dry run; no SSH or Terraform commands will run\n'
   fi
   printf '  Run id: %s\n' "${RUN_ID}"
-  printf '  Region: %s\n' "${AWS_REGION_NAME}"
+  printf '  Terraform: %s\n' "${TF_DIR}"
+  if [[ -n "${TF_VARS_FILE}" ]]; then
+    printf '  Terraform variables: %s\n' "${TF_VARS_FILE}"
+  fi
+  if [[ -f "${CONNECTION_FILE}" ]]; then
+    printf '  Connection metadata: %s\n' "${CONNECTION_FILE}"
+  fi
   if [[ -n "${AWS_PROFILE_NAME}" ]]; then
     printf '  AWS profile: %s\n' "${AWS_PROFILE_NAME}"
   fi
-  printf '  Instance: %s\n' "${INSTANCE_TYPE}"
-  if [[ -n "${INGRESS_CIDR}" ]]; then
-    printf '  SSH ingress: %s\n' "${INGRESS_CIDR}"
-  else
-    printf '  SSH ingress: auto-discovered public IP /32\n'
-  fi
-  if [[ "${CREATE_TEMP_KEY}" == "1" ]]; then
-    printf '  EC2 key pair: temporary %s\n' "${KEY_NAME}"
-    printf '  Local private key: %s (deleted after run)\n' "${KEY_FILE}"
-  else
-    printf '  EC2 key pair: existing %s\n' "${KEY_NAME}"
-    printf '  Local private key: %s (left untouched)\n' "${KEY_FILE}"
-  fi
-  printf '  Terraform variables: %s\n' "${TF_VARS_FILE}"
+  printf '  SSH: %s@%s\n' "${SSH_USER}" "${SSH_HOST:-<terraform ssh_host>}"
+  printf '  SSH key file: %s\n' "${KEY_FILE}"
+  printf '  Remote repo: ~/%s\n' "${REMOTE_DIR}"
   printf '  Raw results: %s\n' "${RESULT_DIR}"
   printf '  Report: %s\n' "${REPORT_PATH}"
   if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
@@ -617,46 +590,12 @@ print_plan() {
 
   if [[ "${DRY_RUN}" == "1" ]]; then
     printf '\nCommands:\n'
-    local -a up_cmd
-    mapfile -d '' -t up_cmd < <(up_command)
-    print_command "${up_cmd[@]}"
+    print_command terraform -chdir="${TF_DIR}" output -raw ssh_host
     printf '  ssh %s@<host> %q\n' "${SSH_USER}" "$(remote_benchmark_command)"
     if [[ "${PROFILE}" == "1" ]]; then
       printf '  ssh %s@<host> %q\n' "${SSH_USER}" "$(remote_profile_command)"
     fi
-    local -a down_cmd
-    mapfile -d '' -t down_cmd < <(down_command)
-    print_command "${down_cmd[@]}"
   fi
-}
-
-ensure_empty_terraform_state() {
-  local state_resources
-
-  print_stage "checking Terraform state"
-  terraform -chdir="${TF_DIR}" init -input=false
-  state_resources=$(terraform -chdir="${TF_DIR}" state list 2>/dev/null || true)
-  [[ -z "${state_resources}" ]] || {
-    printf '%s\n' "${state_resources}" >&2
-    die "Terraform state is not empty; run ./scripts/down or use a clean state before live-benchmark"
-  }
-}
-
-create_temp_key_pair() {
-  [[ "${CREATE_TEMP_KEY}" == "1" ]] || return 0
-
-  print_stage "creating temporary EC2 key pair"
-  mkdir -p "${WORK_DIR}"
-  if ! aws ec2 create-key-pair \
-    --key-name "${KEY_NAME}" \
-    --region "${AWS_REGION_NAME}" \
-    --query KeyMaterial \
-    --output text > "${KEY_FILE}"; then
-    rm -f "${KEY_FILE}"
-    die "failed to create temporary EC2 key pair: ${KEY_NAME}"
-  fi
-  TEMP_KEY_CREATED=1
-  chmod 600 "${KEY_FILE}"
 }
 
 configure_ssh_args() {
@@ -675,22 +614,8 @@ ssh_remote() {
   ssh "${ssh_base_args[@]}" "${SSH_USER}@${SSH_HOST}" "$@"
 }
 
-load_outputs() {
-  INSTANCE_ID=$(terraform -chdir="${TF_DIR}" output -raw instance_id)
-  SSH_HOST=$(terraform -chdir="${TF_DIR}" output -raw ssh_host)
-}
-
-run_up() {
-  local -a cmd
-  mapfile -d '' -t cmd < <(up_command)
-
-  print_stage "provisioning GPU host"
-  TERRAFORM_TOUCHED=1
-  "${cmd[@]}"
-}
-
 run_remote_benchmark() {
-  print_stage "running live benchmark matrix"
+  print_stage "running benchmark matrix"
   ssh_remote "$(remote_benchmark_command)"
 }
 
@@ -719,49 +644,11 @@ pull_profile_artifacts() {
     | tar -xzf - -C "${REPO_ROOT}"
 }
 
-cleanup_resources() {
-  local cleanup_status=0
-
-  if [[ "${CLEANUP_DONE}" == "1" ]]; then
-    return 0
-  fi
-  CLEANUP_DONE=1
-
-  set +e
-
-  if [[ "${TERRAFORM_TOUCHED}" == "1" ]]; then
-    local -a cmd
-    mapfile -d '' -t cmd < <(down_command)
-    print_stage "tearing down GPU host"
-    "${cmd[@]}" || cleanup_status=1
-  fi
-
-  if [[ "${TEMP_KEY_CREATED}" == "1" ]]; then
-    print_stage "deleting temporary EC2 key pair"
-    aws ec2 delete-key-pair \
-      --key-name "${KEY_NAME}" \
-      --region "${AWS_REGION_NAME}" >/dev/null || cleanup_status=1
-    rm -f "${KEY_FILE}" || cleanup_status=1
-  fi
-
-  set -e
-  return "${cleanup_status}"
-}
-
-cleanup_trap() {
-  local status=$?
-  local cleanup_status=0
-
-  cleanup_resources || cleanup_status=$?
-  if [[ "${status}" == "0" && "${cleanup_status}" != "0" ]]; then
-    status=${cleanup_status}
-  fi
-  exit "${status}"
-}
-
 print_complete() {
-  printf '\nLive benchmark complete:\n'
-  printf '  Instance: %s (terminated)\n' "${INSTANCE_ID}"
+  printf '\nBenchmark complete:\n'
+  if [[ -n "${INSTANCE_ID}" ]]; then
+    printf '  Instance: %s (still running)\n' "${INSTANCE_ID}"
+  fi
   printf '  Raw results: %s\n' "${RESULT_DIR}"
   printf '  Report: %s\n' "${REPORT_PATH}"
   if [[ "${PROFILE}" == "1" ]]; then
@@ -769,47 +656,38 @@ print_complete() {
     printf '  Nsight Compute exports: %s\n' "${PROFILE_EXPORT_DIR}"
     printf '  Profile summaries: %s\n' "${PROFILE_REPORT_DIR}"
   fi
-  if [[ "${TEMP_KEY_CREATED}" == "1" ]]; then
-    printf '  EC2 key pair deleted: %s\n' "${KEY_NAME}"
-    printf '  Local private key removed: %s\n' "${KEY_FILE}"
-  fi
 }
 
 main() {
   local profile_status=0
 
   parse_args "$@"
+  load_connection_metadata
   resolve_defaults
   validate_inputs
   collect_source_metadata
-  print_plan
 
   if [[ "${DRY_RUN}" == "1" ]]; then
+    print_plan
     return 0
   fi
 
-  require_commands aws terraform ssh tar git
+  require_commands terraform ssh tar git
   if [[ -n "${AWS_PROFILE_NAME}" ]]; then
     export AWS_PROFILE="${AWS_PROFILE_NAME}"
   fi
 
-  ensure_empty_terraform_state
-  trap cleanup_trap EXIT
-
-  create_temp_key_pair
-  run_up
   load_outputs
   configure_ssh_args
+  print_plan
   run_remote_benchmark
   pull_benchmark_artifacts
   if [[ "${PROFILE}" == "1" ]]; then
     run_remote_profile || profile_status=$?
     pull_profile_artifacts || profile_status=$?
   fi
-  cleanup_resources
-  trap - EXIT
   if [[ "${profile_status}" != "0" ]]; then
-    printf 'error: one or more profile targets failed; copied available artifacts before teardown\n' >&2
+    printf 'error: one or more profile targets failed; copied available artifacts\n' >&2
     return "${profile_status}"
   fi
   print_complete
