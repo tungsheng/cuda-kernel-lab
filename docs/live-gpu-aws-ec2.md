@@ -59,6 +59,7 @@ attention work:
   --include-matmul-sweep \
   --include-rmsnorm-shape-sweep \
   --include-attention-baseline \
+  --include-decode-step \
   --with-profiling
 ```
 
@@ -126,7 +127,8 @@ uv run benchmark-matrix \
   --include-reduction-sweep \
   --include-matmul-sweep \
   --include-rmsnorm-shape-sweep \
-  --include-attention-baseline
+  --include-attention-baseline \
+  --include-decode-step
 uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ./scripts/down
 ```
@@ -169,6 +171,11 @@ Prefer `--with-profiling` when a benchmark needs profiler evidence. It captures:
 The matmul target uses the current Tensor Core candidate launch settings from
 the benchmark CLI and should be read alongside the `--include-matmul-sweep`
 rows before promoting a final tile choice.
+
+When `--include-decode-step` is also set, profiling adds the four synthetic
+decode-step modes: naive eager, fused eager, naive CUDA Graph, and fused CUDA
+Graph. Use those Nsight summaries for the occupancy and HBM-counter side of
+the graph replay comparison.
 
 The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

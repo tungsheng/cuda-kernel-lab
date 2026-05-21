@@ -17,6 +17,7 @@ explains the method being tested, not only the faster backend.
 | fusion | Elementwise SwiGLU fusion | `swiglu` | Fuses sigmoid/SwiLU gating and multiply without materializing activation intermediates. |
 | tiling | Tiled dot-product reuse | `matmul` | Uses tiled `tl.dot` matmul plus tile-shape and launch-configuration sweeps to study reuse, occupancy, pipeline staging, register pressure, and Tensor Core utilization. |
 | fusion | One-token decode attention fusion | `attention` | Establishes the fused target for decode attention: score calculation, softmax, and value accumulation without materialized score/probability tensors. |
+| launch replay | CUDA Graph decode-step replay | `decode_step` | Replays a static synthetic decode step to separate CPU/driver launch overhead from GPU kernel time. |
 
 ## How To Describe An Experiment
 
@@ -68,3 +69,8 @@ Attention experiments should first pin down the PyTorch contiguous-KV baseline
 and shape sensitivity. A future custom kernel should be evaluated as a fused
 decode target where K/V cache reads dominate traffic and score/probability
 intermediate writes are avoided.
+
+CUDA Graph experiments should be read as launch-path tests. Compare host wall
+time, CUDA event time, CPU utilization, and launch-overhead estimates across
+the naive/fused and eager/graph matrix before attributing any change to kernel
+code.

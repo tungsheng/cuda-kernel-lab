@@ -557,6 +557,7 @@ def _method_sort_key(family: str, method_id: str) -> tuple[int, str, str]:
         "reduction": 2,
         "fusion": 3,
         "tiling": 4,
+        "launch replay": 5,
     }
     return (order.get(family, 99), family, method_id)
 
@@ -593,6 +594,7 @@ def _variant_label(run: dict[str, Any]) -> str:
         "swiglu": ("block_size",),
         "matmul": ("block_m", "block_n", "block_k"),
         "attention": ("seq_len", "num_heads", "head_dim"),
+        "decode_step": ("mode", "batch_size", "hidden_dim", "seq_len"),
     }
     fields = []
     for key in strategy_fields.get(str(run.get("benchmark")), ()):

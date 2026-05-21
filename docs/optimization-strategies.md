@@ -120,3 +120,28 @@ Recommended live command for the next evidence bundle:
   --include-attention-baseline \
   --with-profiling
 ```
+
+## CUDA Graph Replay Track
+
+Use `decode_step` when the question is launch overhead rather than a single
+kernel implementation:
+
+1. run the staged matrix: `naive-eager`, `fused-eager`, `naive-graph`,
+   `fused-graph`
+2. compare host latency, CUDA event latency, synthetic tokens/sec, CPU
+   utilization, and launch-overhead estimates
+3. use Nsight Systems when launch ordering or CPU scheduling needs proof
+4. use Nsight Compute on individual fused kernels for occupancy and HBM
+   throughput
+
+Recommended standalone command:
+
+```bash
+uv run benchmark-decode-step --mode all --device cuda --dtype float16
+```
+
+Recommended live command:
+
+```bash
+./scripts/benchmark --run-id <run-id> --include-decode-step
+```

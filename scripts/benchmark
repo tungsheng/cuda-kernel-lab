@@ -81,6 +81,7 @@ INCLUDE_MATMUL=0
 INCLUDE_MATMUL_SWEEP=0
 INCLUDE_RMSNORM_SHAPE_SWEEP=0
 INCLUDE_ATTENTION_BASELINE=0
+INCLUDE_DECODE_STEP=0
 PROFILE=0
 DRY_RUN=0
 
@@ -122,6 +123,7 @@ Options:
                             Include the focused RMSNorm hidden-size and batch-size sweep.
   --include-attention-baseline
                             Include the PyTorch contiguous KV-cache decode-attention baseline.
+  --include-decode-step     Include synthetic decode-step eager vs CUDA Graph replay modes.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
@@ -179,6 +181,10 @@ parse_args() {
         ;;
       --include-attention-baseline)
         INCLUDE_ATTENTION_BASELINE=1
+        shift
+        ;;
+      --include-decode-step)
+        INCLUDE_DECODE_STEP=1
         shift
         ;;
       --with-profiling)
@@ -385,6 +391,9 @@ remote_benchmark_command() {
   if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
     command+=" --include-attention-baseline"
   fi
+  if [[ "${INCLUDE_DECODE_STEP}" == "1" ]]; then
+    command+=" --include-decode-step"
+  fi
   command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
 
   printf '%s\n' "${command}"
@@ -414,6 +423,22 @@ profile_benchmark_command() {
       printf '%s\n' \
         "uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --block-m 64 --block-n 64 --block-k 32 --num-warps 4 --num-stages 3 --input-precision tf32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tiled-float16.jsonl"
       ;;
+    decode-step-naive-eager-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --mode naive-eager --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-naive-eager-float16.jsonl"
+      ;;
+    decode-step-fused-eager-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --mode fused-eager --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-fused-eager-float16.jsonl"
+      ;;
+    decode-step-naive-graph-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --mode naive-graph --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-naive-graph-float16.jsonl"
+      ;;
+    decode-step-fused-graph-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --mode fused-graph --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-fused-graph-float16.jsonl"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -439,6 +464,18 @@ profile_title() {
     matmul-tiled-float16)
       printf '%s\n' "A10G matmul float16 tiled-dot profile"
       ;;
+    decode-step-naive-eager-float16)
+      printf '%s\n' "A10G decode step naive eager float16 profile"
+      ;;
+    decode-step-fused-eager-float16)
+      printf '%s\n' "A10G decode step fused eager float16 profile"
+      ;;
+    decode-step-naive-graph-float16)
+      printf '%s\n' "A10G decode step naive CUDA Graph float16 profile"
+      ;;
+    decode-step-fused-graph-float16)
+      printf '%s\n' "A10G decode step fused CUDA Graph float16 profile"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -460,6 +497,9 @@ profile_operation() {
       ;;
     matmul-tiled-float16)
       printf '%s\n' "matmul"
+      ;;
+    decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16)
+      printf '%s\n' "decode_step"
       ;;
     *)
       die "unknown profile target: ${target}"
@@ -486,6 +526,18 @@ profile_strategy() {
     matmul-tiled-float16)
       printf '%s\n' "triton-tiled-dot-block-64x64x32-warps-4-stages-3"
       ;;
+    decode-step-naive-eager-float16)
+      printf '%s\n' "naive-eager"
+      ;;
+    decode-step-fused-eager-float16)
+      printf '%s\n' "fused-eager"
+      ;;
+    decode-step-naive-graph-float16)
+      printf '%s\n' "naive-graph"
+      ;;
+    decode-step-fused-graph-float16)
+      printf '%s\n' "fused-graph"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -499,7 +551,7 @@ profile_launch_skip() {
     memory-reduction-two-pass-float32)
       printf '%s\n' "10"
       ;;
-    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16)
+    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16)
       printf '%s\n' "5"
       ;;
     *)
@@ -548,6 +600,7 @@ profile_case_command() {
 remote_profile_command() {
   local command
   local target
+  local targets
 
   command="cd ~/${REMOTE_DIR}"
   command+=" && export PATH=\"\$HOME/.local/bin:\$PATH\""
@@ -561,12 +614,23 @@ remote_profile_command() {
   command+="; if [ -z \"\${ncu_bin}\" ]; then printf '# Nsight Compute Profile\\n\\nStatus: ncu was not found on the remote host.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
   command+="; if ! sudo -n true >/dev/null 2>&1; then printf '# Nsight Compute Profile\\n\\nStatus: passwordless sudo is required to access NVIDIA performance counters.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
 
-  for target in \
-    memory-vector-add-float32 \
-    memory-reduction-iterative-float32 \
-    memory-reduction-two-pass-float32 \
-    norms-rmsnorm-float16 \
-    matmul-tiled-float16; do
+  targets=(
+    memory-vector-add-float32
+    memory-reduction-iterative-float32
+    memory-reduction-two-pass-float32
+    norms-rmsnorm-float16
+    matmul-tiled-float16
+  )
+  if [[ "${INCLUDE_DECODE_STEP}" == "1" ]]; then
+    targets+=(
+      decode-step-naive-eager-float16
+      decode-step-fused-eager-float16
+      decode-step-naive-graph-float16
+      decode-step-fused-graph-float16
+    )
+  fi
+
+  for target in "${targets[@]}"; do
     command+="; $(profile_case_command "${target}") || profile_status=1"
   done
   command+="; exit \${profile_status}"
@@ -605,6 +669,9 @@ print_plan() {
   fi
   if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
     printf '  Attention baseline: enabled\n'
+  fi
+  if [[ "${INCLUDE_DECODE_STEP}" == "1" ]]; then
+    printf '  Decode-step graph benchmark: enabled\n'
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"

@@ -61,6 +61,7 @@ class BenchmarkResult:
     strategy: str = "baseline"
     variant: str = "default"
     parameters: dict[str, Any] | None = None
+    metrics: dict[str, Any] | None = None
     optimization: OptimizationTechnique | None = None
     correctness: CorrectnessResult | None = None
 
@@ -103,6 +104,7 @@ class BenchmarkResult:
             "strategy": self.strategy,
             "variant": self.variant,
             "parameters": _jsonable(self.parameters or {}),
+            "metrics": _jsonable(self.metrics or {}),
             "optimization": self.optimization.as_dict() if self.optimization is not None else {},
             "correctness": (
                 self.correctness.as_dict()
@@ -211,6 +213,7 @@ def benchmark_callable(
     strategy: str = "baseline",
     variant: str = "default",
     parameters: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
     optimization: OptimizationTechnique | None = None,
     correctness: CorrectnessResult | None = None,
 ) -> BenchmarkResult:
@@ -256,6 +259,7 @@ def benchmark_callable(
         strategy=strategy,
         variant=variant,
         parameters=parameters,
+        metrics=metrics,
         optimization=optimization,
         correctness=correctness,
     )

@@ -80,6 +80,24 @@ The attention benchmark starts as a PyTorch baseline with the same JSONL
 metadata as the custom-kernel benchmarks. Its traffic model estimates the fused
 decode target: one query read, contiguous K/V cache reads, and one output write.
 
+Synthetic decode step:
+
+```bash
+uv run benchmark-decode-step --mode all --device cuda --dtype float16
+```
+
+The decode-step benchmark compares the staged workflow:
+
+- `naive-eager`: decomposed PyTorch kernels with regular eager launches
+- `fused-eager`: Triton RMSNorm/SwiGLU inside the same synthetic step
+- `naive-graph`: decomposed kernels replayed inside one CUDA Graph
+- `fused-graph`: fused kernels replayed inside one CUDA Graph
+
+It reports host latency, CUDA event latency, estimated launch overhead,
+synthetic tokens/sec, process CPU utilization, analytical HBM throughput, and
+analytical TFLOP/s. Use Nsight Systems for deeper launch timelines and Nsight
+Compute for occupancy/HBM counters on individual kernels.
+
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
 
@@ -127,14 +145,16 @@ the float16 tile-shape and launch-configuration strategy sweep that moves the
 evidence track toward Tensor Core validation. Add `--include-rmsnorm-shape-sweep`
 to check whether the strongest fusion win holds across hidden sizes. Add
 `--include-attention-baseline` to capture the contiguous KV-cache decode baseline
-for the next milestone:
+for the next milestone. Add `--include-decode-step` when the experiment question
+is launch overhead or CUDA Graph replay:
 
 ```bash
 uv run benchmark-matrix \
   --output-dir experiments/results/aws-ec2/<run-id> \
   --include-matmul-sweep \
   --include-rmsnorm-shape-sweep \
-  --include-attention-baseline
+  --include-attention-baseline \
+  --include-decode-step
 ```
 
 When running the matrix manually, pass
@@ -153,6 +173,7 @@ shape, `num_warps`, and `num_stages` variants to
 milestone is about HMMA utilization; use standalone `benchmark-matmul` runs for
 float32 precision experiments. The RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
+The decode-step graph benchmark writes to `decode-step.jsonl`.
 
 ## Save Results
 

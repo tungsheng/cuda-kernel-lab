@@ -18,6 +18,7 @@ def test_benchmark_result_includes_strategy_optimization_and_correctness_metadat
         strategy="triton-block-size",
         variant="block_size=1024",
         parameters={"block_size": 1024},
+        metrics={"tokens_per_second_p50": 1000.0},
         optimization=memory_optimization(
             backend="triton",
             op_name="vector_add",
@@ -39,6 +40,7 @@ def test_benchmark_result_includes_strategy_optimization_and_correctness_metadat
     assert payload["strategy"] == "triton-block-size"
     assert payload["variant"] == "block_size=1024"
     assert payload["parameters"] == {"block_size": 1024}
+    assert payload["metrics"] == {"tokens_per_second_p50": 1000.0}
     assert payload["optimization"]["method_family"] == "launch tuning"
     assert payload["optimization"]["technique"] == "Coalesced block-size tuning"
     assert "knobs" not in payload["optimization"]

@@ -209,6 +209,81 @@ def attention_optimization(
     )
 
 
+def decode_step_optimization(
+    *,
+    kernel_strategy: str,
+    launch_strategy: str,
+) -> OptimizationTechnique:
+    """Return optimization metadata for synthetic decode-step benchmarks."""
+
+    if kernel_strategy == "naive" and launch_strategy == "eager":
+        return OptimizationTechnique(
+            method_family="baseline",
+            method_id="decode_step.naive_eager",
+            technique="Naive eager decode step",
+            hypothesis=(
+                "A decomposed PyTorch decode step establishes the end-to-end launch and "
+                "intermediate-allocation baseline for one synthetic token."
+            ),
+            expected_profiler_signal=(
+                "Many short framework-launched kernels, visible CPU launch overhead, and "
+                "intermediate tensor traffic."
+            ),
+        )
+    if kernel_strategy == "fused" and launch_strategy == "eager":
+        return OptimizationTechnique(
+            method_family="fusion",
+            method_id="decode_step.fused_eager",
+            technique="Fused eager decode step",
+            hypothesis=(
+                "Replacing decomposed normalization and activation work with fused kernels "
+                "should reduce kernel count and intermediate memory traffic before graph replay."
+            ),
+            expected_profiler_signal=(
+                "Fewer elementwise/reduction launches, lower intermediate traffic, and similar "
+                "library matmul/attention work."
+            ),
+        )
+    if kernel_strategy == "naive" and launch_strategy == "graph":
+        return OptimizationTechnique(
+            method_family="launch replay",
+            method_id="decode_step.naive_graph",
+            technique="Naive CUDA Graph replay",
+            hypothesis=(
+                "Replaying the decomposed decode step inside a CUDA Graph should reduce Python "
+                "and driver launch overhead without changing the kernels themselves."
+            ),
+            expected_profiler_signal=(
+                "Similar GPU kernel timings to naive eager mode, lower host wall time, and lower "
+                "CPU utilization per replay."
+            ),
+        )
+    if kernel_strategy == "fused" and launch_strategy == "graph":
+        return OptimizationTechnique(
+            method_family="launch replay",
+            method_id="decode_step.fused_graph",
+            technique="Fused CUDA Graph replay",
+            hypothesis=(
+                "Combining fused kernels with CUDA Graph replay should reduce both intermediate "
+                "traffic and per-token launch overhead."
+            ),
+            expected_profiler_signal=(
+                "Fused-kernel HBM/occupancy signatures with graph-level reductions in CPU "
+                "launch overhead and wall-time jitter."
+            ),
+        )
+
+    return OptimizationTechnique(
+        method_family="custom",
+        method_id=f"decode_step.{kernel_strategy}_{launch_strategy}",
+        technique=f"{kernel_strategy} {launch_strategy} decode step",
+        hypothesis="Review the benchmark parameters to interpret this decode-step strategy.",
+        expected_profiler_signal=(
+            "Use Nsight Systems for launch overhead and Nsight Compute for kernels."
+        ),
+    )
+
+
 def technique_from_result(
     *,
     backend: str,
@@ -238,6 +313,11 @@ def technique_from_result(
         return matmul_optimization(backend=backend)
     if primitive == "attention":
         return attention_optimization(backend=backend)
+    if primitive == "decode_step":
+        return decode_step_optimization(
+            kernel_strategy=str(parameters.get("kernel_strategy") or "custom"),
+            launch_strategy=str(parameters.get("launch_strategy") or "custom"),
+        )
 
     return OptimizationTechnique(
         method_family="custom",
@@ -285,6 +365,12 @@ def technique_from_strategy(strategy: str | None) -> OptimizationTechnique | Non
         return matmul_optimization(backend="triton")
     if strategy == "triton-decode-attention":
         return attention_optimization(backend="triton")
+    if strategy in {"naive-eager", "fused-eager", "naive-graph", "fused-graph"}:
+        kernel_strategy, launch_strategy = strategy.split("-", maxsplit=1)
+        return decode_step_optimization(
+            kernel_strategy=kernel_strategy,
+            launch_strategy=launch_strategy,
+        )
     return None
 
 

@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import pytest
+
+try:
+    import torch
+except ImportError:
+    torch = None
+
+from cuda_kernel_lab.benchmarks.decode_step import (
+    TimedLoop,
+    run_one,
+    selected_modes,
+    timing_metrics,
+)
+from cuda_kernel_lab.ops.decode_step import (
+    decode_step_flop_count,
+    decode_step_memory_traffic_bytes,
+)
+from cuda_kernel_lab.optimization import technique_from_strategy
+
+requires_torch = pytest.mark.skipif(torch is None, reason="torch is not installed")
+
+
+def test_selected_modes_returns_environment_supported_progression() -> None:
+    assert selected_modes("all", device="cpu", fused_available=False) == ("naive-eager",)
+    assert selected_modes("all", device="cpu", fused_available=True) == ("naive-eager",)
+    assert selected_modes("all", device="cuda", fused_available=True) == (
+        "naive-eager",
+        "fused-eager",
+        "naive-graph",
+        "fused-graph",
+    )
+
+
+def test_selected_modes_rejects_unavailable_graph_mode() -> None:
+    with pytest.raises(SystemExit, match="CUDA Graph"):
+        selected_modes("naive-graph", device="cpu", fused_available=True)
+
+
+def test_selected_modes_rejects_fused_cpu_mode() -> None:
+    with pytest.raises(SystemExit, match="--device cuda"):
+        selected_modes("fused-eager", device="cpu", fused_available=True)
+
+
+def test_selected_modes_rejects_unavailable_fused_mode() -> None:
+    with pytest.raises(SystemExit, match="Triton"):
+        selected_modes("fused-eager", device="cuda", fused_available=False)
+
+
+def test_timing_metrics_reports_tokens_cpu_and_launch_overhead() -> None:
+    metrics = timing_metrics(
+        TimedLoop(
+            host_latencies_ms=[1.0, 2.0, 3.0],
+            device_latencies_ms=[0.4, 0.8, 1.2],
+            cpu_latencies_ms=[0.2, 0.4, 0.6],
+        ),
+        tokens_per_step=4,
+        graph_replay=True,
+    )
+
+    assert metrics["host_p50_ms"] == 2.0
+    assert metrics["device_p50_ms"] == 0.8
+    assert metrics["launch_overhead_p50_ms"] == pytest.approx(1.2)
+    assert metrics["tokens_per_second_p50"] == 2000.0
+    assert metrics["cpu_utilization_pct"] == pytest.approx(20.0)
+    assert metrics["graph_replay"] is True
+
+
+def test_decode_step_strategy_labels_map_to_optimization_metadata() -> None:
+    optimization = technique_from_strategy("fused-graph")
+
+    assert optimization is not None
+    assert optimization.method_family == "launch replay"
+    assert optimization.method_id == "decode_step.fused_graph"
+
+
+def test_decode_step_memory_traffic_estimate() -> None:
+    assert (
+        decode_step_memory_traffic_bytes(
+            batch_size=1,
+            hidden_dim=4,
+            intermediate_dim=8,
+            seq_len=2,
+            num_heads=2,
+            head_dim=2,
+            dtype_size=2,
+        )
+        == 376
+    )
+
+
+def test_decode_step_flop_estimate() -> None:
+    assert (
+        decode_step_flop_count(
+            batch_size=1,
+            hidden_dim=4,
+            intermediate_dim=8,
+            seq_len=2,
+            num_heads=2,
+            head_dim=2,
+        )
+        == 279
+    )
+
+
+def test_decode_step_models_reject_invalid_shapes() -> None:
+    with pytest.raises(ValueError, match="batch_size"):
+        decode_step_memory_traffic_bytes(
+            batch_size=0,
+            hidden_dim=4,
+            intermediate_dim=8,
+            seq_len=2,
+            num_heads=2,
+            head_dim=2,
+            dtype_size=2,
+        )
+
+    with pytest.raises(ValueError, match="intermediate_dim"):
+        decode_step_flop_count(
+            batch_size=1,
+            hidden_dim=4,
+            intermediate_dim=3,
+            seq_len=2,
+            num_heads=2,
+            head_dim=2,
+        )
+
+
+@requires_torch
+def test_decode_step_naive_eager_records_extended_metrics() -> None:
+    result = run_one(
+        torch=torch,
+        inputs=_tiny_inputs(),
+        mode="naive-eager",
+        dtype=torch.float32,
+        device="cpu",
+        eps=1e-6,
+        warmup=0,
+        iterations=1,
+        reference=None,
+    )
+
+    assert result.name == "naive:decode_step"
+    assert result.strategy == "naive-eager"
+    assert result.metrics is not None
+    assert result.metrics["tokens_per_step"] == 1
+    assert result.metrics["tokens_per_second_p50"] > 0
+
+
+def _tiny_inputs() -> object:
+    from cuda_kernel_lab.benchmarks.decode_step import DecodeStepInputs
+
+    return DecodeStepInputs(
+        x=torch.randn((1, 4), dtype=torch.float32),
+        rms_weight=torch.randn((4,), dtype=torch.float32),
+        q_weight=torch.randn((4, 4), dtype=torch.float32) * 0.02,
+        gate_weight=torch.randn((4, 4), dtype=torch.float32) * 0.02,
+        up_weight=torch.randn((4, 4), dtype=torch.float32) * 0.02,
+        key_cache=torch.randn((1, 2, 2, 2), dtype=torch.float32),
+        value_cache=torch.randn((1, 2, 2, 2), dtype=torch.float32),
+    )

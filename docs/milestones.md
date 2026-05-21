@@ -15,7 +15,7 @@ the lesson is always the optimization strategy and the benchmark evidence.
 | 6 | matmul tiling progression | tile-shape sweep added |
 | 7 | Tensor Core matmul | launch sweep active |
 | 8 | attention microkernel optimization | PyTorch contiguous-KV baseline added |
-| 9 | final strategy comparison report | synthesis note started |
+| 9 | CUDA Graph replay and final strategy comparison | decode-step benchmark added |
 
 ## Success Criteria
 

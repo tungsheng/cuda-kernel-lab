@@ -94,6 +94,7 @@ def build_matrix(
     attention_num_heads: int = DEFAULT_ATTENTION_NUM_HEADS,
     attention_head_dim: int = DEFAULT_ATTENTION_HEAD_DIM,
     attention_dtype: str = DEFAULT_ATTENTION_DTYPE,
+    include_decode_step: bool = False,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -456,6 +457,30 @@ def build_matrix(
                 ),
             )
         )
+    if include_decode_step:
+        commands.append(
+            MatrixCommand(
+                primitive="decode_step",
+                dtype="float16",
+                command=(
+                    "uv",
+                    "run",
+                    "benchmark-decode-step",
+                    "--mode",
+                    "all",
+                    "--device",
+                    device,
+                    "--dtype",
+                    "float16",
+                    "--warmup",
+                    str(warmup),
+                    "--iterations",
+                    str(iterations),
+                    "--output",
+                    str(output_dir / "decode-step.jsonl"),
+                ),
+            )
+        )
     return tuple(commands)
 
 
@@ -554,6 +579,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Dtype for --include-attention-baseline.",
     )
     parser.add_argument(
+        "--include-decode-step",
+        action="store_true",
+        help="Add the synthetic decode-step eager-vs-CUDA-Graph benchmark.",
+    )
+    parser.add_argument(
         "--reduction-strategy",
         choices=REDUCTION_STRATEGIES,
         default=DEFAULT_REDUCTION_STRATEGY,
@@ -609,6 +639,7 @@ def main(argv: list[str] | None = None) -> None:
         attention_num_heads=args.attention_num_heads,
         attention_head_dim=args.attention_head_dim,
         attention_dtype=args.attention_dtype,
+        include_decode_step=args.include_decode_step,
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,

@@ -203,6 +203,20 @@ def test_matrix_can_include_attention_baseline() -> None:
     ) in command_lines
 
 
+def test_matrix_can_include_decode_step_graph_workflow() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_decode_step=True,
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert len(entries) == 9
+    assert (
+        "uv run benchmark-decode-step --mode all --device cuda --dtype float16 "
+        "--warmup 25 --iterations 100 --output results/decode-step.jsonl"
+    ) in command_lines
+
+
 def test_dry_run_prints_without_executing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -309,6 +323,7 @@ def test_matrix_parses_strategy_sweep_values(
             "8",
             "--attention-head-dim",
             "64",
+            "--include-decode-step",
         ]
     )
 
@@ -330,3 +345,5 @@ def test_matrix_parses_strategy_sweep_values(
     assert "results/attention.jsonl" in output
     assert "uv run benchmark-attention --backend torch" in output
     assert "--seq-len 4096 --num-heads 8 --head-dim 64" in output
+    assert "results/decode-step.jsonl" in output
+    assert "uv run benchmark-decode-step --mode all" in output
