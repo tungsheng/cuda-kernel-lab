@@ -12,7 +12,7 @@ Current implementation:
 
 Planned order:
 
-1. Tensor Core matmul validation
+1. Tensor Core matmul validation with tile and launch sweeps
 2. Paged KV lookup
 3. Decode attention microkernel
 

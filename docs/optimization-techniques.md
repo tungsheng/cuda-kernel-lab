@@ -15,7 +15,7 @@ explains the method being tested, not only the faster backend.
 | fusion | Row-wise softmax fusion | `softmax` | Keeps max, subtract, exp, sum, divide, and output write inside one row-wise kernel. |
 | fusion | Row-wise normalization fusion | `rmsnorm`, `layernorm` | Fuses row reductions, normalization, parameter loads, and affine writeback. |
 | fusion | Elementwise SwiGLU fusion | `swiglu` | Fuses sigmoid/SwiLU gating and multiply without materializing activation intermediates. |
-| tiling | Tiled dot-product reuse | `matmul` | Uses tiled `tl.dot` matmul and tile-shape sweeps to study reuse, occupancy, register pressure, and Tensor Core utilization. |
+| tiling | Tiled dot-product reuse | `matmul` | Uses tiled `tl.dot` matmul plus tile-shape and launch-configuration sweeps to study reuse, occupancy, pipeline staging, register pressure, and Tensor Core utilization. |
 
 ## How To Describe An Experiment
 
@@ -60,4 +60,5 @@ p50 latency and effective bandwidth.
 
 Tiling experiments should be interpreted with TFLOP/s and profiler counters, not
 GB/s alone. For float16 matmul, Tensor Core/HMMA utilization, occupancy, shared
-memory, and registers explain the tile-shape tradeoff.
+memory, registers, warp count, and pipeline stages explain the tile-shape
+tradeoff.

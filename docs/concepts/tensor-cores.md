@@ -21,6 +21,7 @@ For Tensor Core experiments, record:
 - M, N, K shape
 - dtype and accumulation dtype
 - tile shape
+- `num_warps`, `num_stages`, and input precision
 - layout assumptions
 - p50/p95/p99 latency
 - TFLOP/s

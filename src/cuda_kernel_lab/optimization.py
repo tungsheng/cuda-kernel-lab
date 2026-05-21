@@ -173,12 +173,13 @@ def matmul_optimization(
         method_id="triton.tiled_dot",
         technique="Tiled dot-product reuse",
         hypothesis=(
-            "Triton tile-shape sweeps with `tl.dot` can increase arithmetic intensity and Tensor "
-            "Core utilization, but may trade off occupancy and register pressure."
+            "Triton tile-shape and launch-configuration sweeps with `tl.dot` can increase "
+            "arithmetic intensity and Tensor Core utilization, but may trade off occupancy, "
+            "pipeline depth, and register pressure."
         ),
         expected_profiler_signal=(
             "High TFLOP/s for float16, Tensor Core/HMMA utilization, and tile-dependent changes "
-            "in occupancy and register pressure."
+            "in occupancy, register pressure, shared memory, and pipeline staging."
         ),
     )
 

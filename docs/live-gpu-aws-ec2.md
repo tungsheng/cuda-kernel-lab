@@ -51,7 +51,8 @@ Add matmul progression numbers when needed:
 ```
 
 Collect the next recommended matmul evidence set, including the float16
-tile-shape sweep and a focused matmul Nsight Compute profile:
+tile-shape plus launch-configuration sweep and a focused matmul Nsight Compute
+profile:
 
 ```bash
 ./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
@@ -126,6 +127,10 @@ Prefer `--with-profiling` for disposable evidence runs. It captures:
 - `memory-reduction-two-pass-float32`
 - `norms-rmsnorm-float16`
 - `matmul-tiled-float16`
+
+The matmul target uses the current Tensor Core candidate launch settings from
+the benchmark CLI and should be read alongside the `--include-matmul-sweep`
+rows before promoting a final tile choice.
 
 The wrapper runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

@@ -51,7 +51,8 @@ sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-matmul --backend triton --device cuda \
   --m 1024 --n 1024 --k 1024 --dtype float16 \
-  --block-m 32 --block-n 32 --block-k 32 \
+  --block-m 64 --block-n 64 --block-k 32 \
+  --num-warps 4 --num-stages 3 --input-precision tf32 \
   --output experiments/results/aws-ec2/<run-id>-profiled/matmul-profiled.jsonl
 ```
 

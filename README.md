@@ -53,7 +53,7 @@ Add focused Nsight Compute profiler captures to the same disposable session:
 ./scripts/live-benchmark --run-id <run-id> --with-profiling
 ```
 
-Move into the matmul/Tensor Core track with the focused tile-shape sweep:
+Move into the matmul/Tensor Core track with the focused tile and launch sweep:
 
 ```bash
 ./scripts/live-benchmark --run-id <run-id> --include-matmul-sweep --with-profiling

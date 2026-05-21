@@ -13,7 +13,7 @@ the lesson is always the optimization strategy and the benchmark evidence.
 | 4 | normalization fusion | implemented |
 | 5 | SwiGLU elementwise fusion | implemented |
 | 6 | matmul tiling progression | tile-shape sweep added |
-| 7 | Tensor Core matmul | active next |
+| 7 | Tensor Core matmul | launch sweep active |
 | 8 | attention microkernel optimization | planned |
 | 9 | final strategy comparison report | planned |
 

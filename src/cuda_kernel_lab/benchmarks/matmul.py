@@ -23,6 +23,8 @@ from cuda_kernel_lab.metrics import dtype_size_bytes
 from cuda_kernel_lab.ops.matmul import flop_count, memory_traffic_bytes
 from cuda_kernel_lab.optimization import matmul_optimization
 
+INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
+
 
 def main() -> None:
     args = parse_args()
@@ -45,6 +47,9 @@ def main() -> None:
                 block_m=args.block_m,
                 block_n=args.block_n,
                 block_k=args.block_k,
+                num_warps=args.num_warps,
+                num_stages=args.num_stages,
+                input_precision=args.input_precision,
                 warmup=args.warmup,
                 iterations=args.iterations,
                 skip_correctness=args.skip_correctness,
@@ -62,6 +67,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--block-m", type=int, default=16)
     parser.add_argument("--block-n", type=int, default=16)
     parser.add_argument("--block-k", type=int, default=32)
+    parser.add_argument("--num-warps", type=int, default=4)
+    parser.add_argument("--num-stages", type=int, default=3)
+    parser.add_argument(
+        "--input-precision",
+        choices=INPUT_PRECISIONS,
+        default="ieee",
+        help="Triton tl.dot input precision for float32 inputs.",
+    )
     add_common_benchmark_args(parser)
     return parser.parse_args()
 
@@ -86,6 +99,9 @@ def run_one(
     block_m: int,
     block_n: int,
     block_k: int,
+    num_warps: int,
+    num_stages: int,
+    input_precision: str,
     warmup: int,
     iterations: int,
     skip_correctness: bool,
@@ -94,14 +110,41 @@ def run_one(
         raise ValueError("m, n, and k must be positive")
     if block_m <= 0 or block_n <= 0 or block_k <= 0:
         raise ValueError("block_m, block_n, and block_k must be positive")
+    if num_warps <= 0 or num_stages <= 0:
+        raise ValueError("num_warps and num_stages must be positive")
+    if input_precision not in INPUT_PRECISIONS:
+        choices = ", ".join(INPUT_PRECISIONS)
+        raise ValueError(f"input_precision must be one of: {choices}")
 
     a = torch.randn((m, k), device=device, dtype=dtype)
     b = torch.randn((k, n), device=device, dtype=dtype)
     out = torch.empty((m, n), device=device, dtype=dtype)
-    fn = build_op(backend, a, b, out, block_m, block_n, block_k)
+    fn = build_op(
+        backend,
+        a,
+        b,
+        out,
+        block_m,
+        block_n,
+        block_k,
+        num_warps,
+        num_stages,
+        input_precision,
+    )
     correctness = None
     if not skip_correctness:
-        expected = build_op("torch", a, b, None, block_m, block_n, block_k)()
+        expected = build_op(
+            "torch",
+            a,
+            b,
+            None,
+            block_m,
+            block_n,
+            block_k,
+            num_warps,
+            num_stages,
+            input_precision,
+        )()
         actual = fn()
         rtol, atol = correctness_tolerance(dtype)
         correctness = check_tensors_close(
@@ -125,11 +168,18 @@ def run_one(
         warmup=warmup,
         iterations=iterations,
         strategy="torch-baseline" if backend == "torch" else "triton-tiled-dot",
-        variant=f"block_m={block_m}, block_n={block_n}, block_k={block_k}",
+        variant=(
+            f"block_m={block_m}, block_n={block_n}, block_k={block_k}, "
+            f"num_warps={num_warps}, num_stages={num_stages}, "
+            f"input_precision={input_precision}"
+        ),
         parameters={
             "block_m": block_m,
             "block_n": block_n,
             "block_k": block_k,
+            "num_warps": num_warps,
+            "num_stages": num_stages,
+            "input_precision": input_precision,
         },
         optimization=matmul_optimization(backend=backend),
         correctness=correctness,
@@ -144,6 +194,9 @@ def build_op(
     block_m: int,
     block_n: int,
     block_k: int,
+    num_warps: int,
+    num_stages: int,
+    input_precision: str,
 ) -> Callable[[], Any]:
     if backend == "torch":
         from cuda_kernel_lab.kernels.torch_baselines import matmul
@@ -159,6 +212,9 @@ def build_op(
             block_m=block_m,
             block_n=block_n,
             block_k=block_k,
+            num_warps=num_warps,
+            num_stages=num_stages,
+            input_precision=input_precision,
             out=out,
         )
 

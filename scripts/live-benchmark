@@ -120,7 +120,7 @@ Options:
   --instance-type <type>    EC2 GPU instance. Default: ${INSTANCE_TYPE}
   --name <name>             EC2 Name tag. Default: cuda-kernel-lab-<run-id>
   --include-matmul          Include the tiled matmul progression in the matrix.
-  --include-matmul-sweep    Include the float16 matmul tile-shape strategy sweep.
+  --include-matmul-sweep    Include the float16 matmul tile and launch strategy sweep.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --ingress-cidr <cidr>     SSH source CIDR. Default: auto-discover public IP /32.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
@@ -414,7 +414,7 @@ profile_benchmark_command() {
       ;;
     matmul-tiled-float16)
       printf '%s\n' \
-        "uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --block-m 32 --block-n 32 --block-k 32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tiled-float16.jsonl"
+        "uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --block-m 64 --block-n 64 --block-k 32 --num-warps 4 --num-stages 3 --input-precision tf32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tiled-float16.jsonl"
       ;;
     *)
       die "unknown profile target: ${target}"
@@ -486,7 +486,7 @@ profile_strategy() {
       printf '%s\n' "triton-fused-rmsnorm"
       ;;
     matmul-tiled-float16)
-      printf '%s\n' "triton-tiled-dot-block-32x32x32"
+      printf '%s\n' "triton-tiled-dot-block-64x64x32-warps-4-stages-3"
       ;;
     *)
       die "unknown profile target: ${target}"

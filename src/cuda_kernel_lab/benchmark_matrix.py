@@ -16,16 +16,30 @@ DEFAULT_SWIGLU_BLOCK_SIZE = 1024
 DEFAULT_MATMUL_BLOCK_M = 16
 DEFAULT_MATMUL_BLOCK_N = 16
 DEFAULT_MATMUL_BLOCK_K = 32
+DEFAULT_MATMUL_NUM_WARPS = 4
+DEFAULT_MATMUL_NUM_STAGES = 3
+DEFAULT_MATMUL_INPUT_PRECISION = "ieee"
 DEFAULT_MATMUL_SWEEP_TILE_SHAPES = (
     (16, 32, 32),
     (32, 16, 32),
     (32, 32, 32),
     (32, 32, 64),
+    (64, 64, 32),
+    (64, 128, 32),
+    (128, 64, 32),
+    (128, 128, 32),
+)
+DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS = (
+    (4, 3),
+    (4, 4),
+    (8, 3),
+    (8, 4),
 )
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
 DEFAULT_REDUCTION_STRATEGY = "iterative"
 DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
 REDUCTION_STRATEGIES = ("iterative", "two_pass")
+MATMUL_INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
 DEFAULT_DEVICE = "cuda"
 DTYPES = ("float32", "float16")
 
@@ -54,8 +68,12 @@ def build_matrix(
     matmul_block_m: int = DEFAULT_MATMUL_BLOCK_M,
     matmul_block_n: int = DEFAULT_MATMUL_BLOCK_N,
     matmul_block_k: int = DEFAULT_MATMUL_BLOCK_K,
+    matmul_num_warps: int = DEFAULT_MATMUL_NUM_WARPS,
+    matmul_num_stages: int = DEFAULT_MATMUL_NUM_STAGES,
+    matmul_input_precision: str = DEFAULT_MATMUL_INPUT_PRECISION,
     include_matmul_sweep: bool = False,
     matmul_sweep_tile_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_TILE_SHAPES,
+    matmul_sweep_launch_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -74,10 +92,18 @@ def build_matrix(
         raise ValueError("swiglu_block_size must be positive")
     if matmul_block_m <= 0 or matmul_block_n <= 0 or matmul_block_k <= 0:
         raise ValueError("matmul block sizes must be positive")
+    if matmul_num_warps <= 0 or matmul_num_stages <= 0:
+        raise ValueError("matmul launch settings must be positive")
+    if matmul_input_precision not in MATMUL_INPUT_PRECISIONS:
+        raise ValueError("matmul_input_precision must be one of tf32, tf32x3, ieee")
     if any(len(tile_shape) != 3 for tile_shape in matmul_sweep_tile_shapes):
         raise ValueError("matmul_sweep_tile_shapes must be MxNxK triples")
     if any(any(dim <= 0 for dim in tile_shape) for tile_shape in matmul_sweep_tile_shapes):
         raise ValueError("matmul_sweep_tile_shapes must be positive")
+    if any(len(launch_config) != 2 for launch_config in matmul_sweep_launch_configs):
+        raise ValueError("matmul_sweep_launch_configs must be WARPSxSTAGES pairs")
+    if any(any(dim <= 0 for dim in launch_config) for launch_config in matmul_sweep_launch_configs):
+        raise ValueError("matmul_sweep_launch_configs must be positive")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
     if reduction_strategy not in REDUCTION_STRATEGIES:
@@ -86,7 +112,14 @@ def build_matrix(
         raise ValueError("reduction_sweep_strategies must be one of iterative, two_pass")
 
     commands: list[MatrixCommand] = []
-    matmul_baseline_tile_shape = (matmul_block_m, matmul_block_n, matmul_block_k)
+    matmul_baseline_config = (
+        matmul_block_m,
+        matmul_block_n,
+        matmul_block_k,
+        matmul_num_warps,
+        matmul_num_stages,
+        matmul_input_precision,
+    )
     for dtype in DTYPES:
         commands.append(
             MatrixCommand(
@@ -204,7 +237,7 @@ def build_matrix(
                 ),
             )
         )
-        if include_matmul or include_matmul_sweep:
+        if include_matmul or (include_matmul_sweep and dtype == "float16"):
             commands.append(
                 MatrixCommand(
                     primitive="matmul",
@@ -215,6 +248,9 @@ def build_matrix(
                         block_m=matmul_block_m,
                         block_n=matmul_block_n,
                         block_k=matmul_block_k,
+                        num_warps=matmul_num_warps,
+                        num_stages=matmul_num_stages,
+                        input_precision=matmul_input_precision,
                         warmup=warmup,
                         iterations=iterations,
                         output=output_dir / "matmul.jsonl",
@@ -297,9 +333,18 @@ def build_matrix(
             )
 
     if include_matmul_sweep:
-        for block_m, block_n, block_k in _extra_matmul_tile_shapes(
+        for (
+            block_m,
+            block_n,
+            block_k,
+            num_warps,
+            num_stages,
+            input_precision,
+        ) in _extra_matmul_configs(
             matmul_sweep_tile_shapes,
-            baseline_tile_shape=matmul_baseline_tile_shape,
+            matmul_sweep_launch_configs,
+            input_precision=matmul_input_precision,
+            baseline_config=matmul_baseline_config,
         ):
             commands.append(
                 MatrixCommand(
@@ -311,6 +356,9 @@ def build_matrix(
                         block_m=block_m,
                         block_n=block_n,
                         block_k=block_k,
+                        num_warps=num_warps,
+                        num_stages=num_stages,
+                        input_precision=input_precision,
                         warmup=warmup,
                         iterations=iterations,
                         output=output_dir / "matmul-tile-shape.jsonl",
@@ -361,15 +409,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--matmul-block-m", type=int, default=DEFAULT_MATMUL_BLOCK_M)
     parser.add_argument("--matmul-block-n", type=int, default=DEFAULT_MATMUL_BLOCK_N)
     parser.add_argument("--matmul-block-k", type=int, default=DEFAULT_MATMUL_BLOCK_K)
+    parser.add_argument("--matmul-num-warps", type=int, default=DEFAULT_MATMUL_NUM_WARPS)
+    parser.add_argument("--matmul-num-stages", type=int, default=DEFAULT_MATMUL_NUM_STAGES)
+    parser.add_argument(
+        "--matmul-input-precision",
+        choices=MATMUL_INPUT_PRECISIONS,
+        default=DEFAULT_MATMUL_INPUT_PRECISION,
+        help="Triton tl.dot input precision passed to benchmark-matmul.",
+    )
     parser.add_argument(
         "--include-matmul-sweep",
         action="store_true",
-        help="Add the float16 matmul tile-shape strategy sweep.",
+        help="Add the float16 matmul tile-shape and launch-configuration strategy sweep.",
     )
     parser.add_argument(
         "--matmul-sweep-tile-shapes",
         default=_join_tile_shapes(DEFAULT_MATMUL_SWEEP_TILE_SHAPES),
         help="Comma-separated MxNxK tile shapes for --include-matmul-sweep.",
+    )
+    parser.add_argument(
+        "--matmul-sweep-launch-configs",
+        default=_join_launch_configs(DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS),
+        help="Comma-separated WARPSxSTAGES launch configs for --include-matmul-sweep.",
     )
     parser.add_argument(
         "--reduction-strategy",
@@ -413,8 +474,12 @@ def main(argv: list[str] | None = None) -> None:
         matmul_block_m=args.matmul_block_m,
         matmul_block_n=args.matmul_block_n,
         matmul_block_k=args.matmul_block_k,
+        matmul_num_warps=args.matmul_num_warps,
+        matmul_num_stages=args.matmul_num_stages,
+        matmul_input_precision=args.matmul_input_precision,
         include_matmul_sweep=args.include_matmul_sweep,
         matmul_sweep_tile_shapes=_parse_tile_shapes(args.matmul_sweep_tile_shapes),
+        matmul_sweep_launch_configs=_parse_launch_configs(args.matmul_sweep_launch_configs),
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,
@@ -439,6 +504,9 @@ def _matmul_command(
     block_m: int,
     block_n: int,
     block_k: int,
+    num_warps: int,
+    num_stages: int,
+    input_precision: str,
     warmup: int,
     iterations: int,
     output: Path,
@@ -465,6 +533,12 @@ def _matmul_command(
         str(block_n),
         "--block-k",
         str(block_k),
+        "--num-warps",
+        str(num_warps),
+        "--num-stages",
+        str(num_stages),
+        "--input-precision",
+        input_precision,
         "--warmup",
         str(warmup),
         "--iterations",
@@ -495,12 +569,29 @@ def _parse_tile_shapes(value: str) -> tuple[tuple[int, ...], ...]:
                 raise ValueError
             tile_shapes.append(dimensions)
     except ValueError as exc:
-        raise ValueError(
-            "matmul_sweep_tile_shapes must be comma-separated MxNxK triples"
-        ) from exc
+        raise ValueError("matmul_sweep_tile_shapes must be comma-separated MxNxK triples") from exc
     if not tile_shapes:
         raise ValueError("matmul_sweep_tile_shapes must not be empty")
     return tuple(tile_shapes)
+
+
+def _parse_launch_configs(value: str) -> tuple[tuple[int, ...], ...]:
+    launch_configs = []
+    try:
+        for token in (part.strip() for part in value.split(",")):
+            if not token:
+                continue
+            dimensions = tuple(int(part.strip()) for part in token.lower().split("x"))
+            if len(dimensions) != 2:
+                raise ValueError
+            launch_configs.append(dimensions)
+    except ValueError as exc:
+        raise ValueError(
+            "matmul_sweep_launch_configs must be comma-separated WARPSxSTAGES pairs"
+        ) from exc
+    if not launch_configs:
+        raise ValueError("matmul_sweep_launch_configs must not be empty")
+    return tuple(launch_configs)
 
 
 def _extra_vector_add_block_sizes(
@@ -518,20 +609,24 @@ def _extra_vector_add_block_sizes(
     return tuple(extras)
 
 
-def _extra_matmul_tile_shapes(
+def _extra_matmul_configs(
     tile_shapes: tuple[tuple[int, ...], ...],
+    launch_configs: tuple[tuple[int, ...], ...],
     *,
-    baseline_tile_shape: tuple[int, int, int],
-) -> tuple[tuple[int, int, int], ...]:
-    seen = {baseline_tile_shape}
+    input_precision: str,
+    baseline_config: tuple[int, int, int, int, int, str],
+) -> tuple[tuple[int, int, int, int, int, str], ...]:
+    seen = {baseline_config}
     extras = []
     for tile_shape in tile_shapes:
         block_m, block_n, block_k = tile_shape
-        normalized = (block_m, block_n, block_k)
-        if normalized in seen:
-            continue
-        extras.append(normalized)
-        seen.add(normalized)
+        for launch_config in launch_configs:
+            num_warps, num_stages = launch_config
+            normalized = (block_m, block_n, block_k, num_warps, num_stages, input_precision)
+            if normalized in seen:
+                continue
+            extras.append(normalized)
+            seen.add(normalized)
     return tuple(extras)
 
 
@@ -559,6 +654,10 @@ def _join_block_sizes(block_sizes: tuple[int, ...]) -> str:
 
 def _join_tile_shapes(tile_shapes: tuple[tuple[int, int, int], ...]) -> str:
     return ",".join(f"{block_m}x{block_n}x{block_k}" for block_m, block_n, block_k in tile_shapes)
+
+
+def _join_launch_configs(launch_configs: tuple[tuple[int, int], ...]) -> str:
+    return ",".join(f"{num_warps}x{num_stages}" for num_warps, num_stages in launch_configs)
 
 
 def _join_values(values: tuple[str, ...]) -> str:

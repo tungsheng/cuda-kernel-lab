@@ -55,6 +55,20 @@ Matmul:
 uv run benchmark-matmul --backend all --device cuda --m 1024 --n 1024 --k 1024
 ```
 
+For the Triton matmul path, the benchmark records tile shape, launch
+configuration, and `tl.dot` input precision:
+
+```bash
+uv run benchmark-matmul --backend all --device cuda \
+  --m 1024 --n 1024 --k 1024 --dtype float16 \
+  --block-m 64 --block-n 64 --block-k 32 \
+  --num-warps 4 --num-stages 4 --input-precision tf32
+```
+
+The default `input_precision` is `ieee` so standalone float32 correctness checks
+compare strict FP32 semantics. Use `tf32` or `tf32x3` only when the experiment is
+explicitly about approximate float32 Tensor Core behavior.
+
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
 
@@ -96,8 +110,8 @@ disposable GPU session:
 
 Add `--include-matmul` when you want the default tiled matmul progression
 numbers in the same run directory. Add `--include-matmul-sweep` when you want
-the float16 tile-shape strategy sweep that moves the evidence track toward
-Tensor Core validation:
+the float16 tile-shape and launch-configuration strategy sweep that moves the
+evidence track toward Tensor Core validation:
 
 ```bash
 uv run benchmark-matrix \
@@ -114,8 +128,11 @@ The sweep appends the additional PyTorch and Triton `vector_add` comparison
 runs, `512` and `2048`, to the run's `vector-add-block-size.jsonl`. It also
 appends the non-default `reduction_sum` strategy comparison to
 `reduction-strategy.jsonl`. The matmul sweep appends additional float16 tile
-shape variants to `matmul-tile-shape.jsonl` while keeping the default matmul
-baseline in `matmul.jsonl`.
+shape, `num_warps`, and `num_stages` variants to
+`matmul-tile-shape.jsonl` while keeping the default float16 matmul baseline in
+`matmul.jsonl`. The sweep is scoped to float16 because the Tensor Core
+milestone is about HMMA utilization; use standalone `benchmark-matmul` runs for
+float32 precision experiments.
 
 ## Save Results
 

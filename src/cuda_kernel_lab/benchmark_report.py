@@ -407,13 +407,13 @@ def _technique_takeaway_lines(rows: list[ReportRow]) -> list[str]:
             best = max(tiling_rows, key=lambda row: row.tflops)
             lines.append(
                 "- Tiled matmul rows should be judged by TFLOP/s and Tensor Core counters; "
-                f"the current best Triton tile is {_row_label(best)} at "
+                f"the current best Triton tile/launch config is {_row_label(best)} at "
                 f"{_fmt(best.tflops)} TFLOP/s."
             )
         else:
             lines.append(
                 "- Tiling rows should be paired with Tensor Core, register, and occupancy "
-                "counters before choosing a final tile shape."
+                "counters before choosing a final tile and launch configuration."
             )
 
     return lines or ["- No cataloged optimization techniques were found in this result set."]
@@ -503,9 +503,7 @@ def _top_triton_wins(rows: list[ReportRow]) -> list[ReportRow]:
     wins = [
         row
         for row in rows
-        if row.backend == "triton"
-        and row.speedup_vs_torch is not None
-        and row.speedup_vs_torch > 1
+        if row.backend == "triton" and row.speedup_vs_torch is not None and row.speedup_vs_torch > 1
     ]
     return sorted(wins, key=lambda row: row.speedup_vs_torch or 0, reverse=True)[:3]
 

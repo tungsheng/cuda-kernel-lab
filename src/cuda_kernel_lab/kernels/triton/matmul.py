@@ -17,6 +17,10 @@ except ImportError:
 DEFAULT_BLOCK_M = 16
 DEFAULT_BLOCK_N = 16
 DEFAULT_BLOCK_K = 32
+DEFAULT_NUM_WARPS = 4
+DEFAULT_NUM_STAGES = 3
+DEFAULT_INPUT_PRECISION = "ieee"
+INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
 
 
 def is_available() -> bool:
@@ -32,11 +36,16 @@ def matmul(
     block_m: int = DEFAULT_BLOCK_M,
     block_n: int = DEFAULT_BLOCK_N,
     block_k: int = DEFAULT_BLOCK_K,
+    num_warps: int = DEFAULT_NUM_WARPS,
+    num_stages: int = DEFAULT_NUM_STAGES,
+    input_precision: str = DEFAULT_INPUT_PRECISION,
     out: Any | None = None,
 ) -> Any:
     """Return a @ b using a tiled Triton kernel."""
 
     _require_positive_blocks(block_m=block_m, block_n=block_n, block_k=block_k)
+    _require_positive_launch(num_warps=num_warps, num_stages=num_stages)
+    _require_input_precision(input_precision)
     _require_matmul_inputs(a, b)
     m, k = a.shape
     _, n = b.shape
@@ -59,6 +68,9 @@ def matmul(
         block_m,
         block_n,
         block_k,
+        input_precision,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
     return out
 
@@ -66,6 +78,17 @@ def matmul(
 def _require_positive_blocks(*, block_m: int, block_n: int, block_k: int) -> None:
     if block_m <= 0 or block_n <= 0 or block_k <= 0:
         raise ValueError("block_m, block_n, and block_k must be positive")
+
+
+def _require_positive_launch(*, num_warps: int, num_stages: int) -> None:
+    if num_warps <= 0 or num_stages <= 0:
+        raise ValueError("num_warps and num_stages must be positive")
+
+
+def _require_input_precision(input_precision: str) -> None:
+    if input_precision not in INPUT_PRECISIONS:
+        choices = ", ".join(INPUT_PRECISIONS)
+        raise ValueError(f"input_precision must be one of: {choices}")
 
 
 def _require_matmul_inputs(a: Any, b: Any) -> None:
@@ -113,6 +136,7 @@ if triton is not None and tl is not None:
         block_m: tl.constexpr,
         block_n: tl.constexpr,
         block_k: tl.constexpr,
+        input_precision: tl.constexpr,
     ):
         pid = tl.program_id(0)
         num_pid_n = tl.cdiv(n, block_n)
@@ -136,7 +160,7 @@ if triton is not None and tl is not None:
                 mask=(k_offsets[:, None] < k) & (offs_n[None, :] < n),
                 other=0.0,
             )
-            accumulator += tl.dot(a, b)
+            accumulator += tl.dot(a, b, input_precision=input_precision)
 
         tl.store(
             out_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn,

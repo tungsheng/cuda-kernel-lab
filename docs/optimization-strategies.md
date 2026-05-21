@@ -86,9 +86,11 @@ Use `swiglu` to study elementwise fusion without reduction complexity:
 Use `matmul` to move from memory-dominated kernels into reuse and tile shape:
 
 1. compare PyTorch against the tiled Triton `tl.dot` implementation
-2. run `--include-matmul-sweep` to compare focused float16 tile shapes
+2. run `--include-matmul-sweep` to compare focused float16 tile shapes and
+   launch configurations
 3. separate p50 latency from achieved TFLOP/s and tail noise
-4. use Nsight Compute to confirm occupancy, registers, shared memory, and Tensor Core utilization
+4. use Nsight Compute to confirm occupancy, registers, shared memory, pipeline
+   staging, and Tensor Core utilization
 
 Recommended live command:
 
