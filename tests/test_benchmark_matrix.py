@@ -210,10 +210,15 @@ def test_matrix_can_include_decode_step_graph_workflow() -> None:
     )
     command_lines = [entry.shell_line() for entry in entries]
 
-    assert len(entries) == 9
+    assert len(entries) == 10
     assert (
         "uv run benchmark-decode-step --mode all --device cuda --dtype float16 "
         "--warmup 25 --iterations 100 --output results/decode-step.jsonl"
+    ) in command_lines
+    assert (
+        "uv run benchmark-decode-step --dynamic-trace --mode all --device cuda "
+        "--dtype float16 --warmup 25 --iterations 100 "
+        "--output results/decode-step-dynamic.jsonl"
     ) in command_lines
 
 
@@ -347,3 +352,5 @@ def test_matrix_parses_strategy_sweep_values(
     assert "--seq-len 4096 --num-heads 8 --head-dim 64" in output
     assert "results/decode-step.jsonl" in output
     assert "uv run benchmark-decode-step --mode all" in output
+    assert "results/decode-step-dynamic.jsonl" in output
+    assert "uv run benchmark-decode-step --dynamic-trace --mode all" in output

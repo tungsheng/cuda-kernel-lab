@@ -123,7 +123,7 @@ Options:
                             Include the focused RMSNorm hidden-size and batch-size sweep.
   --include-attention-baseline
                             Include the PyTorch contiguous KV-cache decode-attention baseline.
-  --include-decode-step     Include synthetic decode-step eager vs CUDA Graph replay modes.
+  --include-decode-step     Include synthetic decode-step graph, piecewise graph, and dynamic trace modes.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
@@ -439,6 +439,10 @@ profile_benchmark_command() {
       printf '%s\n' \
         "uv run benchmark-decode-step --mode fused-graph --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-fused-graph-float16.jsonl"
       ;;
+    decode-step-fused-piecewise-graph-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --mode fused-piecewise-graph --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-fused-piecewise-graph-float16.jsonl"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -476,6 +480,9 @@ profile_title() {
     decode-step-fused-graph-float16)
       printf '%s\n' "A10G decode step fused CUDA Graph float16 profile"
       ;;
+    decode-step-fused-piecewise-graph-float16)
+      printf '%s\n' "A10G decode step fused piecewise CUDA Graph float16 profile"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -498,7 +505,7 @@ profile_operation() {
     matmul-tiled-float16)
       printf '%s\n' "matmul"
       ;;
-    decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16)
+    decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16)
       printf '%s\n' "decode_step"
       ;;
     *)
@@ -538,6 +545,9 @@ profile_strategy() {
     decode-step-fused-graph-float16)
       printf '%s\n' "fused-graph"
       ;;
+    decode-step-fused-piecewise-graph-float16)
+      printf '%s\n' "fused-piecewise-graph"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -551,7 +561,7 @@ profile_launch_skip() {
     memory-reduction-two-pass-float32)
       printf '%s\n' "10"
       ;;
-    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16)
+    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16)
       printf '%s\n' "5"
       ;;
     *)
@@ -627,6 +637,7 @@ remote_profile_command() {
       decode-step-fused-eager-float16
       decode-step-naive-graph-float16
       decode-step-fused-graph-float16
+      decode-step-fused-piecewise-graph-float16
     )
   fi
 

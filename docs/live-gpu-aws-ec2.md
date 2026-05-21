@@ -172,10 +172,12 @@ The matmul target uses the current Tensor Core candidate launch settings from
 the benchmark CLI and should be read alongside the `--include-matmul-sweep`
 rows before promoting a final tile choice.
 
-When `--include-decode-step` is also set, profiling adds the four synthetic
-decode-step modes: naive eager, fused eager, naive CUDA Graph, and fused CUDA
-Graph. Use those Nsight summaries for the occupancy and HBM-counter side of
-the graph replay comparison.
+When `--include-decode-step` is also set, profiling adds the fixed-shape
+synthetic decode-step modes: naive eager, fused eager, naive CUDA Graph, fused
+CUDA Graph, and fused piecewise CUDA Graph. Use those Nsight summaries for the
+occupancy and HBM-counter side of the graph replay comparison. The matrix also
+writes a dynamic trace to `decode-step-dynamic.jsonl` for scheduler metrics such
+as graph hit rate and padding waste.
 
 The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

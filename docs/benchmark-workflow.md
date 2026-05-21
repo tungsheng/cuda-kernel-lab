@@ -92,11 +92,22 @@ The decode-step benchmark compares the staged workflow:
 - `fused-eager`: Triton RMSNorm/SwiGLU inside the same synthetic step
 - `naive-graph`: decomposed kernels replayed inside one CUDA Graph
 - `fused-graph`: fused kernels replayed inside one CUDA Graph
+- `fused-piecewise-graph`: fused static regions captured around eager attention
 
 It reports host latency, CUDA event latency, estimated launch overhead,
 synthetic tokens/sec, process CPU utilization, analytical HBM throughput, and
 analytical TFLOP/s. Use Nsight Systems for deeper launch timelines and Nsight
 Compute for occupancy/HBM counters on individual kernels.
+
+Dynamic batching/scheduling trace:
+
+```bash
+uv run benchmark-decode-step --dynamic-trace --mode all --device cuda --dtype float16
+```
+
+The dynamic trace replays variable active batch sizes and sequence lengths into
+batch buckets. It reports graph hit rate, padding waste, synthetic queue wait,
+scheduler CPU time, batch occupancy, and prefill/decode/mixed step counts.
 
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
@@ -173,7 +184,8 @@ shape, `num_warps`, and `num_stages` variants to
 milestone is about HMMA utilization; use standalone `benchmark-matmul` runs for
 float32 precision experiments. The RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
-The decode-step graph benchmark writes to `decode-step.jsonl`.
+The fixed-shape decode-step graph benchmark writes to `decode-step.jsonl`. The
+dynamic trace writes to `decode-step-dynamic.jsonl`.
 
 ## Save Results
 

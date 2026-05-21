@@ -23,8 +23,8 @@ the benchmark script collect focused profiles and compact summaries:
 ./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
-Add `--include-decode-step` to profile the naive/fused and eager/CUDA-Graph
-decode-step modes alongside the standard kernel targets.
+Add `--include-decode-step` to profile the naive/fused, full-graph, and
+piecewise-graph decode-step modes alongside the standard kernel targets.
 
 Example command shape:
 

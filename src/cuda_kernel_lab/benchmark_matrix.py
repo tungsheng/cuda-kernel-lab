@@ -481,6 +481,30 @@ def build_matrix(
                 ),
             )
         )
+        commands.append(
+            MatrixCommand(
+                primitive="decode_step",
+                dtype="float16",
+                command=(
+                    "uv",
+                    "run",
+                    "benchmark-decode-step",
+                    "--dynamic-trace",
+                    "--mode",
+                    "all",
+                    "--device",
+                    device,
+                    "--dtype",
+                    "float16",
+                    "--warmup",
+                    str(warmup),
+                    "--iterations",
+                    str(iterations),
+                    "--output",
+                    str(output_dir / "decode-step-dynamic.jsonl"),
+                ),
+            )
+        )
     return tuple(commands)
 
 
@@ -581,7 +605,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--include-decode-step",
         action="store_true",
-        help="Add the synthetic decode-step eager-vs-CUDA-Graph benchmark.",
+        help="Add synthetic decode-step graph, piecewise graph, and dynamic trace benchmarks.",
     )
     parser.add_argument(
         "--reduction-strategy",

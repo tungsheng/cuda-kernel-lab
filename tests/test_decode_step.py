@@ -8,7 +8,14 @@ except ImportError:
     torch = None
 
 from cuda_kernel_lab.benchmarks.decode_step import (
+    DynamicTimedLoop,
     TimedLoop,
+    TraceStep,
+    average_trace_flop_count,
+    average_trace_memory_traffic_bytes,
+    dynamic_timing_metrics,
+    generate_dynamic_trace,
+    parse_batch_buckets,
     run_one,
     selected_modes,
     timing_metrics,
@@ -30,6 +37,16 @@ def test_selected_modes_returns_environment_supported_progression() -> None:
         "fused-eager",
         "naive-graph",
         "fused-graph",
+        "fused-piecewise-graph",
+    )
+    assert selected_modes(
+        "all",
+        device="cuda",
+        fused_available=True,
+        dynamic_trace=True,
+    ) == (
+        "dynamic-eager",
+        "dynamic-piecewise-graph",
     )
 
 
@@ -68,11 +85,81 @@ def test_timing_metrics_reports_tokens_cpu_and_launch_overhead() -> None:
 
 
 def test_decode_step_strategy_labels_map_to_optimization_metadata() -> None:
-    optimization = technique_from_strategy("fused-graph")
+    optimization = technique_from_strategy("fused-piecewise-graph")
 
     assert optimization is not None
     assert optimization.method_family == "launch replay"
-    assert optimization.method_id == "decode_step.fused_graph"
+    assert optimization.method_id == "decode_step.fused_piecewise_graph"
+
+
+def test_dynamic_trace_reports_scheduler_and_padding_metrics() -> None:
+    trace = (
+        TraceStep(active_batch_size=1, seq_len=2, phase="decode", queue_wait_ms=0.03),
+        TraceStep(active_batch_size=3, seq_len=4, phase="mixed", queue_wait_ms=0.01),
+    )
+    metrics = dynamic_timing_metrics(
+        dynamic_loop=DynamicTimedLoop(
+            timings=TimedLoop(
+                host_latencies_ms=[1.0, 3.0],
+                device_latencies_ms=[0.5, 1.0],
+                cpu_latencies_ms=[0.2, 0.4],
+            ),
+            scheduler_cpu_latencies_ms=[0.01, 0.03],
+            graph_hits=2,
+            recapture_count=0,
+        ),
+        trace=trace,
+        batch_buckets=(1, 4),
+        max_batch_size=4,
+        graph_replay=True,
+    )
+
+    assert metrics["tokens_per_second"] == pytest.approx(1000.0)
+    assert metrics["graph_hit_rate_pct"] == 100.0
+    assert metrics["padding_waste_pct"] == pytest.approx(20.0)
+    assert metrics["batch_occupancy_avg_pct"] == pytest.approx(50.0)
+    assert metrics["decode_steps"] == 1
+    assert metrics["mixed_steps"] == 1
+
+
+def test_dynamic_trace_generation_and_bucket_parsing_are_deterministic() -> None:
+    trace = generate_dynamic_trace(
+        steps=3,
+        max_batch_size=4,
+        min_seq_len=2,
+        max_seq_len=8,
+        seed=7,
+        prefill_interval=2,
+        mixed_interval=3,
+    )
+
+    assert parse_batch_buckets("1, 2", max_batch_size=4) == (1, 2, 4)
+    assert len(trace) == 3
+    assert [step.phase for step in trace] == ["decode", "prefill", "mixed"]
+    assert all(1 <= step.active_batch_size <= 4 for step in trace)
+
+
+def test_dynamic_trace_accounting_averages_variable_steps() -> None:
+    trace = (
+        TraceStep(active_batch_size=1, seq_len=2, phase="decode", queue_wait_ms=0.0),
+        TraceStep(active_batch_size=2, seq_len=3, phase="decode", queue_wait_ms=0.0),
+    )
+
+    assert average_trace_memory_traffic_bytes(
+        trace,
+        hidden_dim=4,
+        intermediate_dim=8,
+        num_heads=2,
+        head_dim=2,
+        dtype_size=2,
+    ) == 496
+    assert average_trace_flop_count(
+        trace,
+        hidden_dim=4,
+        intermediate_dim=8,
+        num_heads=2,
+        head_dim=2,
+    ) == 444
 
 
 def test_decode_step_memory_traffic_estimate() -> None:

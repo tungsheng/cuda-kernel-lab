@@ -272,6 +272,20 @@ def decode_step_optimization(
                 "launch overhead and wall-time jitter."
             ),
         )
+    if kernel_strategy == "fused" and launch_strategy == "piecewise_graph":
+        return OptimizationTechnique(
+            method_family="launch replay",
+            method_id="decode_step.fused_piecewise_graph",
+            technique="Fused piecewise CUDA Graph replay",
+            hypothesis=(
+                "Capturing the static fused pre/post-attention regions while leaving attention "
+                "eager should keep graph benefits when batch and sequence shapes vary."
+            ),
+            expected_profiler_signal=(
+                "Graph replay around fused RMSNorm/SwiGLU regions with eager attention kernels "
+                "between them, plus lower CPU launch overhead than fully eager dynamic replay."
+            ),
+        )
 
     return OptimizationTechnique(
         method_family="custom",
@@ -365,7 +379,30 @@ def technique_from_strategy(strategy: str | None) -> OptimizationTechnique | Non
         return matmul_optimization(backend="triton")
     if strategy == "triton-decode-attention":
         return attention_optimization(backend="triton")
-    if strategy in {"naive-eager", "fused-eager", "naive-graph", "fused-graph"}:
+    if strategy in {
+        "naive-eager",
+        "fused-eager",
+        "naive-graph",
+        "fused-graph",
+        "fused-piecewise-graph",
+        "dynamic-eager",
+        "dynamic-piecewise-graph",
+    }:
+        if strategy == "fused-piecewise-graph":
+            return decode_step_optimization(
+                kernel_strategy="fused",
+                launch_strategy="piecewise_graph",
+            )
+        if strategy == "dynamic-eager":
+            return decode_step_optimization(
+                kernel_strategy="fused",
+                launch_strategy="eager",
+            )
+        if strategy == "dynamic-piecewise-graph":
+            return decode_step_optimization(
+                kernel_strategy="fused",
+                launch_strategy="piecewise_graph",
+            )
         kernel_strategy, launch_strategy = strategy.split("-", maxsplit=1)
         return decode_step_optimization(
             kernel_strategy=kernel_strategy,

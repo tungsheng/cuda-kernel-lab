@@ -594,7 +594,7 @@ def _variant_label(run: dict[str, Any]) -> str:
         "swiglu": ("block_size",),
         "matmul": ("block_m", "block_n", "block_k"),
         "attention": ("seq_len", "num_heads", "head_dim"),
-        "decode_step": ("mode", "batch_size", "hidden_dim", "seq_len"),
+        "decode_step": ("mode", "batch_size", "max_batch_size", "hidden_dim", "seq_len"),
     }
     fields = []
     for key in strategy_fields.get(str(run.get("benchmark")), ()):

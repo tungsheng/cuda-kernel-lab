@@ -95,7 +95,7 @@ Current implemented kernels:
 - fused SwiGLU elementwise activation
 - tiled matmul progression kernel
 - contiguous KV-cache decode-attention PyTorch baseline
-- synthetic decode-step benchmark for eager launches vs CUDA Graph replay
+- synthetic decode-step benchmark for eager, full-graph, piecewise-graph, and dynamic trace replay
 
 This repo focuses on kernel optimization strategy: memory coalescing,
 vectorization, reductions, fusion, launch tuning, profiler validation, and
