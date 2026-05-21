@@ -16,6 +16,7 @@ explains the method being tested, not only the faster backend.
 | fusion | Row-wise normalization fusion | `rmsnorm`, `layernorm` | Fuses row reductions, normalization, parameter loads, and affine writeback. |
 | fusion | Elementwise SwiGLU fusion | `swiglu` | Fuses sigmoid/SwiLU gating and multiply without materializing activation intermediates. |
 | tiling | Tiled dot-product reuse | `matmul` | Uses tiled `tl.dot` matmul plus tile-shape and launch-configuration sweeps to study reuse, occupancy, pipeline staging, register pressure, and Tensor Core utilization. |
+| fusion | One-token decode attention fusion | `attention` | Establishes the fused target for decode attention: score calculation, softmax, and value accumulation without materialized score/probability tensors. |
 
 ## How To Describe An Experiment
 
@@ -62,3 +63,8 @@ Tiling experiments should be interpreted with TFLOP/s and profiler counters, not
 GB/s alone. For float16 matmul, Tensor Core/HMMA utilization, occupancy, shared
 memory, registers, warp count, and pipeline stages explain the tile-shape
 tradeoff.
+
+Attention experiments should first pin down the PyTorch contiguous-KV baseline
+and shape sensitivity. A future custom kernel should be evaluated as a fused
+decode target where K/V cache reads dominate traffic and score/probability
+intermediate writes are avoided.

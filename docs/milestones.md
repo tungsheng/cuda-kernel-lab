@@ -14,8 +14,8 @@ the lesson is always the optimization strategy and the benchmark evidence.
 | 5 | SwiGLU elementwise fusion | implemented |
 | 6 | matmul tiling progression | tile-shape sweep added |
 | 7 | Tensor Core matmul | launch sweep active |
-| 8 | attention microkernel optimization | planned |
-| 9 | final strategy comparison report | planned |
+| 8 | attention microkernel optimization | PyTorch contiguous-KV baseline added |
+| 9 | final strategy comparison report | synthesis note started |
 
 ## Success Criteria
 

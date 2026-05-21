@@ -1,5 +1,6 @@
 """PyTorch reference implementations for correctness and baseline benchmarks."""
 
+from cuda_kernel_lab.kernels.torch_baselines.attention import decode_attention
 from cuda_kernel_lab.kernels.torch_baselines.matmul import matmul
 from cuda_kernel_lab.kernels.torch_baselines.memory import (
     copy,
@@ -13,6 +14,7 @@ from cuda_kernel_lab.kernels.torch_baselines.swiglu import swiglu
 
 __all__ = [
     "copy",
+    "decode_attention",
     "layernorm",
     "matmul",
     "reduction_sum",

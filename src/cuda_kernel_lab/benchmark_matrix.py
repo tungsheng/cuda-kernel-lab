@@ -35,6 +35,18 @@ DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS = (
     (8, 3),
     (8, 4),
 )
+DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES = (
+    (512, 1024),
+    (1024, 2048),
+    (2048, 4096),
+    (4096, 4096),
+    (4096, 8192),
+)
+DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE = "float16"
+DEFAULT_ATTENTION_SEQ_LEN = 2048
+DEFAULT_ATTENTION_NUM_HEADS = 16
+DEFAULT_ATTENTION_HEAD_DIM = 128
+DEFAULT_ATTENTION_DTYPE = "float16"
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
 DEFAULT_REDUCTION_STRATEGY = "iterative"
 DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
@@ -74,6 +86,14 @@ def build_matrix(
     include_matmul_sweep: bool = False,
     matmul_sweep_tile_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_TILE_SHAPES,
     matmul_sweep_launch_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS,
+    include_rmsnorm_shape_sweep: bool = False,
+    rmsnorm_shape_sweep_shapes: tuple[tuple[int, ...], ...] = DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES,
+    rmsnorm_shape_sweep_dtype: str = DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE,
+    include_attention_baseline: bool = False,
+    attention_seq_len: int = DEFAULT_ATTENTION_SEQ_LEN,
+    attention_num_heads: int = DEFAULT_ATTENTION_NUM_HEADS,
+    attention_head_dim: int = DEFAULT_ATTENTION_HEAD_DIM,
+    attention_dtype: str = DEFAULT_ATTENTION_DTYPE,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -104,6 +124,16 @@ def build_matrix(
         raise ValueError("matmul_sweep_launch_configs must be WARPSxSTAGES pairs")
     if any(any(dim <= 0 for dim in launch_config) for launch_config in matmul_sweep_launch_configs):
         raise ValueError("matmul_sweep_launch_configs must be positive")
+    if any(len(shape) != 2 for shape in rmsnorm_shape_sweep_shapes):
+        raise ValueError("rmsnorm_shape_sweep_shapes must be ROWSxCOLS pairs")
+    if any(any(dim <= 0 for dim in shape) for shape in rmsnorm_shape_sweep_shapes):
+        raise ValueError("rmsnorm_shape_sweep_shapes must be positive")
+    if rmsnorm_shape_sweep_dtype not in DTYPES:
+        raise ValueError("rmsnorm_shape_sweep_dtype must be one of float32, float16")
+    if attention_seq_len <= 0 or attention_num_heads <= 0 or attention_head_dim <= 0:
+        raise ValueError("attention shape values must be positive")
+    if attention_dtype not in DTYPES:
+        raise ValueError("attention_dtype must be one of float32, float16")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
     if reduction_strategy not in REDUCTION_STRATEGIES:
@@ -365,6 +395,67 @@ def build_matrix(
                     ),
                 )
             )
+    if include_rmsnorm_shape_sweep:
+        for rows, cols in rmsnorm_shape_sweep_shapes:
+            commands.append(
+                MatrixCommand(
+                    primitive="norms",
+                    dtype=rmsnorm_shape_sweep_dtype,
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-norms",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--op",
+                        "rmsnorm",
+                        "--rows",
+                        str(rows),
+                        "--cols",
+                        str(cols),
+                        "--dtype",
+                        rmsnorm_shape_sweep_dtype,
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "rmsnorm-shape-sweep.jsonl"),
+                    ),
+                )
+            )
+    if include_attention_baseline:
+        commands.append(
+            MatrixCommand(
+                primitive="attention",
+                dtype=attention_dtype,
+                command=(
+                    "uv",
+                    "run",
+                    "benchmark-attention",
+                    "--backend",
+                    "torch",
+                    "--device",
+                    device,
+                    "--seq-len",
+                    str(attention_seq_len),
+                    "--num-heads",
+                    str(attention_num_heads),
+                    "--head-dim",
+                    str(attention_head_dim),
+                    "--dtype",
+                    attention_dtype,
+                    "--warmup",
+                    str(warmup),
+                    "--iterations",
+                    str(iterations),
+                    "--output",
+                    str(output_dir / "attention.jsonl"),
+                ),
+            )
+        )
     return tuple(commands)
 
 
@@ -433,6 +524,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated WARPSxSTAGES launch configs for --include-matmul-sweep.",
     )
     parser.add_argument(
+        "--include-rmsnorm-shape-sweep",
+        action="store_true",
+        help="Add a focused RMSNorm shape sweep for hidden-size and batch-size evidence.",
+    )
+    parser.add_argument(
+        "--rmsnorm-shape-sweep-shapes",
+        default=_join_shapes(DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES),
+        help="Comma-separated ROWSxCOLS shapes for --include-rmsnorm-shape-sweep.",
+    )
+    parser.add_argument(
+        "--rmsnorm-shape-sweep-dtype",
+        choices=DTYPES,
+        default=DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE,
+        help="Dtype for --include-rmsnorm-shape-sweep.",
+    )
+    parser.add_argument(
+        "--include-attention-baseline",
+        action="store_true",
+        help="Add the PyTorch contiguous KV-cache decode-attention baseline.",
+    )
+    parser.add_argument("--attention-seq-len", type=int, default=DEFAULT_ATTENTION_SEQ_LEN)
+    parser.add_argument("--attention-num-heads", type=int, default=DEFAULT_ATTENTION_NUM_HEADS)
+    parser.add_argument("--attention-head-dim", type=int, default=DEFAULT_ATTENTION_HEAD_DIM)
+    parser.add_argument(
+        "--attention-dtype",
+        choices=DTYPES,
+        default=DEFAULT_ATTENTION_DTYPE,
+        help="Dtype for --include-attention-baseline.",
+    )
+    parser.add_argument(
         "--reduction-strategy",
         choices=REDUCTION_STRATEGIES,
         default=DEFAULT_REDUCTION_STRATEGY,
@@ -480,6 +601,14 @@ def main(argv: list[str] | None = None) -> None:
         include_matmul_sweep=args.include_matmul_sweep,
         matmul_sweep_tile_shapes=_parse_tile_shapes(args.matmul_sweep_tile_shapes),
         matmul_sweep_launch_configs=_parse_launch_configs(args.matmul_sweep_launch_configs),
+        include_rmsnorm_shape_sweep=args.include_rmsnorm_shape_sweep,
+        rmsnorm_shape_sweep_shapes=_parse_shapes(args.rmsnorm_shape_sweep_shapes),
+        rmsnorm_shape_sweep_dtype=args.rmsnorm_shape_sweep_dtype,
+        include_attention_baseline=args.include_attention_baseline,
+        attention_seq_len=args.attention_seq_len,
+        attention_num_heads=args.attention_num_heads,
+        attention_head_dim=args.attention_head_dim,
+        attention_dtype=args.attention_dtype,
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,
@@ -594,6 +723,25 @@ def _parse_launch_configs(value: str) -> tuple[tuple[int, ...], ...]:
     return tuple(launch_configs)
 
 
+def _parse_shapes(value: str) -> tuple[tuple[int, ...], ...]:
+    shapes = []
+    try:
+        for token in (part.strip() for part in value.split(",")):
+            if not token:
+                continue
+            dimensions = tuple(int(part.strip()) for part in token.lower().split("x"))
+            if len(dimensions) != 2:
+                raise ValueError
+            shapes.append(dimensions)
+    except ValueError as exc:
+        raise ValueError(
+            "rmsnorm_shape_sweep_shapes must be comma-separated ROWSxCOLS pairs"
+        ) from exc
+    if not shapes:
+        raise ValueError("rmsnorm_shape_sweep_shapes must not be empty")
+    return tuple(shapes)
+
+
 def _extra_vector_add_block_sizes(
     block_sizes: tuple[int, ...],
     *,
@@ -658,6 +806,10 @@ def _join_tile_shapes(tile_shapes: tuple[tuple[int, int, int], ...]) -> str:
 
 def _join_launch_configs(launch_configs: tuple[tuple[int, int], ...]) -> str:
     return ",".join(f"{num_warps}x{num_stages}" for num_warps, num_stages in launch_configs)
+
+
+def _join_shapes(shapes: tuple[tuple[int, int], ...]) -> str:
+    return ",".join(f"{rows}x{cols}" for rows, cols in shapes)
 
 
 def _join_values(values: tuple[str, ...]) -> str:

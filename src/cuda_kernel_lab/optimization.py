@@ -184,6 +184,31 @@ def matmul_optimization(
     )
 
 
+def attention_optimization(
+    *,
+    backend: str,
+) -> OptimizationTechnique:
+    """Return optimization metadata for decode attention benchmarks."""
+
+    if backend == "torch":
+        return torch_reference_baseline()
+
+    return OptimizationTechnique(
+        method_family="fusion",
+        method_id="triton.decode_attention_fusion",
+        technique="One-token decode attention fusion",
+        hypothesis=(
+            "Fusing score calculation, softmax, and value accumulation for one decode token "
+            "should avoid materialized score/probability tensors and make KV-cache traffic the "
+            "dominant cost."
+        ),
+        expected_profiler_signal=(
+            "Global traffic dominated by contiguous K/V cache reads, little intermediate write "
+            "traffic, and occupancy/register pressure shaped by head_dim and sequence length."
+        ),
+    )
+
+
 def technique_from_result(
     *,
     backend: str,
@@ -211,6 +236,8 @@ def technique_from_result(
         return swiglu_optimization(backend=backend)
     if primitive == "matmul":
         return matmul_optimization(backend=backend)
+    if primitive == "attention":
+        return attention_optimization(backend=backend)
 
     return OptimizationTechnique(
         method_family="custom",
@@ -256,6 +283,8 @@ def technique_from_strategy(strategy: str | None) -> OptimizationTechnique | Non
         return swiglu_optimization(backend="triton")
     if strategy.startswith("triton-tiled-dot"):
         return matmul_optimization(backend="triton")
+    if strategy == "triton-decode-attention":
+        return attention_optimization(backend="triton")
     return None
 
 

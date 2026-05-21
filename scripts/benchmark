@@ -79,6 +79,8 @@ OUTPUT_ROOT="experiments/results/aws-ec2"
 REPORT_ROOT="experiments/reports/aws-ec2"
 INCLUDE_MATMUL=0
 INCLUDE_MATMUL_SWEEP=0
+INCLUDE_RMSNORM_SHAPE_SWEEP=0
+INCLUDE_ATTENTION_BASELINE=0
 PROFILE=0
 DRY_RUN=0
 
@@ -116,6 +118,10 @@ Options:
   --profile <name>          AWS CLI profile used by Terraform output reads.
   --include-matmul          Include the tiled matmul progression in the matrix.
   --include-matmul-sweep    Include the float16 matmul tile and launch strategy sweep.
+  --include-rmsnorm-shape-sweep
+                            Include the focused RMSNorm hidden-size and batch-size sweep.
+  --include-attention-baseline
+                            Include the PyTorch contiguous KV-cache decode-attention baseline.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
@@ -165,6 +171,14 @@ parse_args() {
         ;;
       --include-matmul-sweep)
         INCLUDE_MATMUL_SWEEP=1
+        shift
+        ;;
+      --include-rmsnorm-shape-sweep)
+        INCLUDE_RMSNORM_SHAPE_SWEEP=1
+        shift
+        ;;
+      --include-attention-baseline)
+        INCLUDE_ATTENTION_BASELINE=1
         shift
         ;;
       --with-profiling)
@@ -363,7 +377,13 @@ remote_benchmark_command() {
     command+=" --include-matmul"
   fi
   if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
-    command+=" --include-matmul-sweep"
+    command+=" --include-matmul-sweep --matmul-input-precision tf32"
+  fi
+  if [[ "${INCLUDE_RMSNORM_SHAPE_SWEEP}" == "1" ]]; then
+    command+=" --include-rmsnorm-shape-sweep"
+  fi
+  if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
+    command+=" --include-attention-baseline"
   fi
   command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
 
@@ -579,6 +599,12 @@ print_plan() {
     printf '  Matmul sweep: enabled\n'
   elif [[ "${INCLUDE_MATMUL}" == "1" ]]; then
     printf '  Matmul baseline: enabled\n'
+  fi
+  if [[ "${INCLUDE_RMSNORM_SHAPE_SWEEP}" == "1" ]]; then
+    printf '  RMSNorm shape sweep: enabled\n'
+  fi
+  if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
+    printf '  Attention baseline: enabled\n'
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"

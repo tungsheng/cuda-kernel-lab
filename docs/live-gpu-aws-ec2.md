@@ -50,6 +50,18 @@ Run more benchmark experiments without another Terraform apply/destroy cycle:
 ./scripts/benchmark --run-id <second-run-id> --include-matmul-sweep
 ```
 
+Capture the current recommended evidence bundle before moving from matmul into
+attention work:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --include-matmul-sweep \
+  --include-rmsnorm-shape-sweep \
+  --include-attention-baseline \
+  --with-profiling
+```
+
 If you edit local kernels or benchmark code while the host is still running,
 rerun `./scripts/up` to resync and re-bootstrap the remote repo before the next
 `./scripts/benchmark`.
@@ -112,7 +124,9 @@ uv run benchmark-matrix \
   --output-dir experiments/results/aws-ec2/<run-id> \
   --include-vector-add-sweep \
   --include-reduction-sweep \
-  --include-matmul-sweep
+  --include-matmul-sweep \
+  --include-rmsnorm-shape-sweep \
+  --include-attention-baseline
 uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 ./scripts/down
 ```

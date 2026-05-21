@@ -94,6 +94,7 @@ Current implemented kernels:
 - RMSNorm and LayerNorm forward kernels
 - fused SwiGLU elementwise activation
 - tiled matmul progression kernel
+- contiguous KV-cache decode-attention PyTorch baseline
 
 This repo focuses on kernel optimization strategy: memory coalescing,
 vectorization, reductions, fusion, launch tuning, profiler validation, and

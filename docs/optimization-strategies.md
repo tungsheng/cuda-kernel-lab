@@ -97,3 +97,26 @@ Recommended live command:
 ```bash
 ./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
+
+## Attention Baseline Track
+
+Use `attention` to bridge from dense matmul reuse into KV-cache dominated decode
+work:
+
+1. capture the PyTorch contiguous-KV baseline with `--include-attention-baseline`
+2. vary sequence length, head count, and head dimension with standalone
+   `benchmark-attention` commands
+3. compare effective traffic against the fused target model before writing a
+   custom kernel
+4. only then add paged-cache addressing or Triton/CUDA decode fusion
+
+Recommended live command for the next evidence bundle:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --include-matmul-sweep \
+  --include-rmsnorm-shape-sweep \
+  --include-attention-baseline \
+  --with-profiling
+```

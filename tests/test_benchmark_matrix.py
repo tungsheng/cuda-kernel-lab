@@ -162,6 +162,47 @@ def test_matrix_can_include_matmul_strategy_sweep() -> None:
     assert all("--block-m 16 --block-n 16 --block-k 32" not in line for line in sweep_lines)
 
 
+def test_matrix_can_include_rmsnorm_shape_sweep() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_rmsnorm_shape_sweep=True,
+        rmsnorm_shape_sweep_shapes=((512, 1024), (4096, 8192)),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+    sweep_lines = [line for line in command_lines if "rmsnorm-shape-sweep.jsonl" in line]
+
+    assert len(entries) == 10
+    assert (
+        "uv run benchmark-norms --backend all --device cuda --op rmsnorm "
+        "--rows 512 --cols 1024 --dtype float16 --warmup 25 --iterations 100 "
+        "--output results/rmsnorm-shape-sweep.jsonl"
+    ) in sweep_lines
+    assert (
+        "uv run benchmark-norms --backend all --device cuda --op rmsnorm "
+        "--rows 4096 --cols 8192 --dtype float16 --warmup 25 --iterations 100 "
+        "--output results/rmsnorm-shape-sweep.jsonl"
+    ) in sweep_lines
+
+
+def test_matrix_can_include_attention_baseline() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_attention_baseline=True,
+        attention_seq_len=4096,
+        attention_num_heads=8,
+        attention_head_dim=64,
+        attention_dtype="float16",
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert len(entries) == 9
+    assert (
+        "uv run benchmark-attention --backend torch --device cuda --seq-len 4096 "
+        "--num-heads 8 --head-dim 64 --dtype float16 --warmup 25 --iterations 100 "
+        "--output results/attention.jsonl"
+    ) in command_lines
+
+
 def test_dry_run_prints_without_executing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -216,6 +257,21 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="matmul_sweep_launch_configs"):
         benchmark_matrix.build_matrix(matmul_sweep_launch_configs=((4, 0),))
 
+    with pytest.raises(ValueError, match="rmsnorm_shape_sweep_shapes"):
+        benchmark_matrix.build_matrix(rmsnorm_shape_sweep_shapes=((1024,),))
+
+    with pytest.raises(ValueError, match="rmsnorm_shape_sweep_shapes"):
+        benchmark_matrix.build_matrix(rmsnorm_shape_sweep_shapes=((1024, 0),))
+
+    with pytest.raises(ValueError, match="rmsnorm_shape_sweep_dtype"):
+        benchmark_matrix.build_matrix(rmsnorm_shape_sweep_dtype="int8")
+
+    with pytest.raises(ValueError, match="attention shape"):
+        benchmark_matrix.build_matrix(attention_seq_len=0)
+
+    with pytest.raises(ValueError, match="attention_dtype"):
+        benchmark_matrix.build_matrix(attention_dtype="int8")
+
     with pytest.raises(ValueError, match="vector_add_sweep_block_sizes"):
         benchmark_matrix.build_matrix(vector_add_sweep_block_sizes=(512, 0))
 
@@ -243,6 +299,16 @@ def test_matrix_parses_strategy_sweep_values(
             "16x32x32,32x16x32",
             "--matmul-sweep-launch-configs",
             "4x3,8x4",
+            "--include-rmsnorm-shape-sweep",
+            "--rmsnorm-shape-sweep-shapes",
+            "512x1024,4096x8192",
+            "--include-attention-baseline",
+            "--attention-seq-len",
+            "4096",
+            "--attention-num-heads",
+            "8",
+            "--attention-head-dim",
+            "64",
         ]
     )
 
@@ -258,3 +324,9 @@ def test_matrix_parses_strategy_sweep_values(
     assert "--block-m 16 --block-n 32 --block-k 32" in output
     assert "--block-m 32 --block-n 16 --block-k 32" in output
     assert "--num-warps 8 --num-stages 4" in output
+    assert "results/rmsnorm-shape-sweep.jsonl" in output
+    assert "--rows 512 --cols 1024 --dtype float16" in output
+    assert "--rows 4096 --cols 8192 --dtype float16" in output
+    assert "results/attention.jsonl" in output
+    assert "uv run benchmark-attention --backend torch" in output
+    assert "--seq-len 4096 --num-heads 8 --head-dim 64" in output
