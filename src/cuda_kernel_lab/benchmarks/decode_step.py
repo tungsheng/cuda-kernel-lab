@@ -138,6 +138,10 @@ class PiecewiseGraphRuntime:
     query_views: tuple[Any, ...] = ()
     ff_attention_views: tuple[Any, ...] = ()
     output_views: tuple[Any, ...] = ()
+    key_cache_views: tuple[Any, ...] = ()
+    value_cache_views: tuple[Any, ...] = ()
+    key_cache_head_major_views: tuple[Any, ...] = ()
+    value_cache_head_major_views: tuple[Any, ...] = ()
 
     def replay(self, *, active_batch_size: int | None = None, seq_len: int | None = None) -> Any:
         self._replay_graph(self.pre_graph)
@@ -201,16 +205,16 @@ class PiecewiseGraphRuntime:
             context = _decode_attention_sdpa_head_major(
                 self.torch,
                 query,
-                self.inputs.key_cache_head_major[:active, :, :length],
-                self.inputs.value_cache_head_major[:active, :, :length],
+                self.key_cache_head_major_views[active][:, :, :length],
+                self.value_cache_head_major_views[active][:, :, :length],
             )
             return context.flatten(start_dim=1)
 
         context = _decode_attention_batched(
             self.torch,
             query,
-            self.inputs.key_cache[:active, :length],
-            self.inputs.value_cache[:active, :length],
+            self.key_cache_views[active][:, :length],
+            self.value_cache_views[active][:, :length],
             backend=self.attention_backend,
         )
         return context.flatten(start_dim=1)
@@ -1791,6 +1795,20 @@ def prepare_piecewise_graph_runtime(
             ff[:active, :attention_dim] for active in range(batch_size + 1)
         ),
         output_views=tuple(output[:active] for active in range(batch_size + 1)),
+        key_cache_views=tuple(inputs.key_cache[:active] for active in range(batch_size + 1)),
+        value_cache_views=tuple(
+            inputs.value_cache[:active] for active in range(batch_size + 1)
+        ),
+        key_cache_head_major_views=(
+            tuple(inputs.key_cache_head_major[:active] for active in range(batch_size + 1))
+            if inputs.key_cache_head_major is not None
+            else ()
+        ),
+        value_cache_head_major_views=(
+            tuple(inputs.value_cache_head_major[:active] for active in range(batch_size + 1))
+            if inputs.value_cache_head_major is not None
+            else ()
+        ),
     )
 
 
