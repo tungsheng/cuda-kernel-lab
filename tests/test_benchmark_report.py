@@ -130,6 +130,80 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
     assert "| 2 | 1.067 |" in report
 
 
+def test_render_markdown_includes_dynamic_trace_detail(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "decode-step-dynamic-tail.jsonl",
+        [
+            _record(
+                benchmark="decode_step",
+                name="dynamic-piecewise-graph-same-stream:decode_step",
+                dtype="float16",
+                shape=(8, 2048, 16, 64, 4096),
+                p50=0.45,
+                p95=1.1,
+                p99=1.3,
+                gbps=80.0,
+                tflops=0.2,
+                args={
+                    "batch_buckets": "1,2,4,8",
+                    "mode": "dynamic-piecewise-graph-same-stream",
+                    "seed": 7,
+                    "warmup": 25,
+                    "iterations": 500,
+                },
+                metrics={
+                    "tokens_per_second": 7600.0,
+                    "tokens_per_second_at_host_p95": 4100.0,
+                    "scheduler_cpu_p95_us": 1100.0,
+                    "host_tail_ratio_p95_p50": 2.44,
+                    "padding_waste_pct": 9.5,
+                    "bucket_breakdown": {
+                        "1": {
+                            "steps": 10,
+                            "host_p50_ms": 0.4,
+                            "host_p95_ms": 0.45,
+                            "host_p99_ms": 0.48,
+                            "host_tail_ratio_p95_p50": 1.12,
+                            "padding_waste_pct": 0.0,
+                        },
+                        "8": {
+                            "steps": 30,
+                            "host_p50_ms": 0.8,
+                            "host_p95_ms": 1.25,
+                            "host_p99_ms": 1.35,
+                            "host_tail_ratio_p95_p50": 1.56,
+                            "padding_waste_pct": 12.5,
+                        },
+                    },
+                    "orchestration_breakdown": {
+                        "input_copy_host_ms": {
+                            "samples": 500,
+                            "host_p50_ms": 0.06,
+                            "host_p95_ms": 0.08,
+                            "host_p99_ms": 0.1,
+                            "total_host_ms": 32.0,
+                        }
+                    },
+                },
+            )
+        ],
+    )
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+    report = benchmark_report.render_markdown(rows, input_dir=tmp_path)
+
+    assert "## Dynamic Trace Detail" in report
+    assert "### Tail Policy Summary" in report
+    assert "| 1,2,4,8 | 1 | 0.45 | 1.1 | 1.3 | 7600 | 4100 | 9.5 | 1.25 |" in report
+    assert "### Tail Sweep" in report
+    assert "| dynamic-piecewise-graph-same-stream | 1,2,4,8 | 7 | 0.45 | 1.1 |" in report
+    assert "8 (p95 1.25 ms)" in report
+    assert "### Worst Dynamic Buckets" in report
+    assert "| dynamic-piecewise-graph-same-stream | `decode-step-dynamic-tail.jsonl` |" in report
+    assert "### Host Orchestration" in report
+    assert "| dynamic-piecewise-graph-same-stream | 1,2,4,8 | 7 | input_copy_host_ms |" in report
+
+
 def test_render_markdown_rejects_empty_input(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no benchmark JSONL records"):
         benchmark_report.render_markdown([], input_dir=tmp_path)
@@ -201,6 +275,7 @@ def _record(
     shape: tuple[int, ...] = (16_777_216,),
     tflops: float = 0.0,
     args: dict[str, object] | None = None,
+    metrics: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "run": {
@@ -238,6 +313,7 @@ def _record(
             "strategy": _strategy_for(name),
             "variant": _variant_for(benchmark, args or _args_for(benchmark)),
             "parameters": args or _args_for(benchmark),
+            "metrics": metrics or {},
             "correctness": {
                 "checked": True,
                 "passed": True,
@@ -276,6 +352,8 @@ def _strategy_for(name: str) -> str:
     backend, operation = name.split(":", maxsplit=1)
     if backend == "torch":
         return "torch-baseline"
+    if operation == "decode_step":
+        return backend
     if operation == "softmax":
         return "triton-fused-row-softmax"
     return f"triton-{operation}"

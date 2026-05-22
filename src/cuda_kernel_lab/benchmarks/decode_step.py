@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from random import Random
 from time import perf_counter, process_time
 from typing import Any
 
-from cuda_kernel_lab.benchmark import BenchmarkResult, check_tensors_close
+from cuda_kernel_lab.benchmark import BenchmarkResult, CorrectnessResult, check_tensors_close
 from cuda_kernel_lab.benchmark_cli import (
     DTYPES,
     correctness_tolerance,
@@ -32,9 +32,17 @@ STATIC_MODES = (
     "naive-graph",
     "fused-graph",
     "fused-piecewise-graph",
+    "fused-piecewise-graph-same-stream",
 )
-DYNAMIC_MODES = ("dynamic-eager", "dynamic-piecewise-graph")
+DYNAMIC_MODES = (
+    "dynamic-eager",
+    "dynamic-piecewise-graph-same-stream",
+    "dynamic-piecewise-graph",
+)
 MODES = (*STATIC_MODES, *DYNAMIC_MODES)
+ATTENTION_BACKENDS = ("einsum", "sdpa")
+DYNAMIC_COPY_MODES = ("full", "x-only")
+PIECEWISE_POST_MODES = ("graph", "eager")
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_MAX_BATCH_SIZE = 8
 DEFAULT_HIDDEN_DIM = 1024
@@ -48,6 +56,11 @@ DEFAULT_BATCH_BUCKETS = (1, 2, 4, 8)
 DEFAULT_PREFILL_INTERVAL = 16
 DEFAULT_MIXED_INTERVAL = 7
 PHASES = ("decode", "prefill", "mixed")
+PIECEWISE_LAUNCH_STRATEGIES = ("piecewise_graph", "piecewise_graph_same_stream")
+DYNAMIC_PIECEWISE_MODES = (
+    "dynamic-piecewise-graph",
+    "dynamic-piecewise-graph-same-stream",
+)
 
 
 @dataclass(frozen=True)
@@ -90,6 +103,15 @@ class DynamicTimedLoop:
     scheduler_cpu_latencies_ms: list[float]
     graph_hits: int
     recapture_count: int
+    region_latencies_ms: dict[str, list[float]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DynamicStepResult:
+    """One dynamic trace step result plus host-side orchestration timings."""
+
+    graph_hit: bool
+    regions_ms: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -98,26 +120,92 @@ class PiecewiseGraphRuntime:
 
     torch: Any
     inputs: DecodeStepInputs
+    normalized: Any
     q_flat: Any
     context_flat: Any
+    gate: Any
+    up: Any
+    ff: Any
     output: Any
     pre_graph: Any
     post_graph: Any
+    graph_stream: Any | None
+    attention_backend: str = "einsum"
+    post_mode: str = "graph"
 
     def replay(self, *, active_batch_size: int | None = None, seq_len: int | None = None) -> Any:
-        self.pre_graph.replay()
-        active = active_batch_size or self.inputs.x.shape[0]
-        length = seq_len or self.inputs.key_cache.shape[1]
+        output, _ = self.replay_with_stage_timing(
+            active_batch_size=active_batch_size,
+            seq_len=seq_len,
+        )
+        return output
+
+    def replay_with_stage_timing(
+        self,
+        *,
+        active_batch_size: int | None = None,
+        seq_len: int | None = None,
+    ) -> tuple[Any, dict[str, float]]:
+        regions_ms = {}
+
+        region_start = perf_counter()
+        self._replay_graph(self.pre_graph)
+        regions_ms["piecewise_pre_graph_host_ms"] = (perf_counter() - region_start) * 1_000
+
+        active = active_batch_size if active_batch_size is not None else self.inputs.x.shape[0]
+        length = seq_len if seq_len is not None else self.inputs.key_cache.shape[1]
         query = _query_view(self.q_flat[:active], self.inputs)
+        region_start = perf_counter()
         context = _decode_attention_batched(
             self.torch,
             query,
             self.inputs.key_cache[:active, :length],
             self.inputs.value_cache[:active, :length],
+            backend=self.attention_backend,
         )
-        self.context_flat[:active].copy_(context.flatten(start_dim=1))
-        self.post_graph.replay()
-        return self.output[:active]
+        regions_ms["piecewise_attention_host_ms"] = (perf_counter() - region_start) * 1_000
+
+        context_flat = context.flatten(start_dim=1)
+        if self.post_mode == "graph":
+            region_start = perf_counter()
+            self.context_flat[:active].copy_(context_flat)
+            if active < self.context_flat.shape[0]:
+                self.context_flat[active:].zero_()
+            regions_ms["piecewise_context_copy_host_ms"] = (
+                perf_counter() - region_start
+            ) * 1_000
+
+            region_start = perf_counter()
+            self._replay_graph(self.post_graph)
+            regions_ms["piecewise_post_graph_host_ms"] = (
+                perf_counter() - region_start
+            ) * 1_000
+        elif self.post_mode == "eager":
+            attention_dim = self.context_flat.shape[1]
+            region_start = perf_counter()
+            self.torch.add(
+                context_flat,
+                self.ff[:active, :attention_dim],
+                out=self.output[:active],
+            )
+            regions_ms["piecewise_post_eager_host_ms"] = (
+                perf_counter() - region_start
+            ) * 1_000
+        else:
+            raise ValueError(f"unknown piecewise post mode: {self.post_mode}")
+
+        return self.output[:active], regions_ms
+
+    def _replay_graph(self, graph: Any) -> None:
+        if self.graph_stream is None:
+            graph.replay()
+            return
+
+        current_stream = self.torch.cuda.current_stream()
+        self.graph_stream.wait_stream(current_stream)
+        with self.torch.cuda.stream(self.graph_stream):
+            graph.replay()
+        current_stream.wait_stream(self.graph_stream)
 
 
 def main() -> None:
@@ -155,6 +243,7 @@ def main() -> None:
         dtype=dtype,
         device=device,
     )
+    attention_backend = args.attention_backend
     if dynamic_trace:
         trace = generate_dynamic_trace(
             steps=args.iterations,
@@ -176,8 +265,11 @@ def main() -> None:
                 dtype=dtype,
                 device=device,
                 eps=args.eps,
+                attention_backend=attention_backend,
                 warmup=args.warmup,
                 reference_checks=not args.skip_correctness,
+                dynamic_copy_mode=args.dynamic_copy_mode,
+                piecewise_post_mode=args.piecewise_post_mode,
             )
             for mode in modes
         ]
@@ -187,7 +279,13 @@ def main() -> None:
     reference = (
         None
         if args.skip_correctness
-        else build_decode_step_op(torch, inputs, "naive", args.eps)()
+        else build_decode_step_op(
+            torch,
+            inputs,
+            "naive",
+            args.eps,
+            attention_backend=attention_backend,
+        )()
     )
 
     results = [
@@ -198,6 +296,8 @@ def main() -> None:
             dtype=dtype,
             device=device,
             eps=args.eps,
+            attention_backend=attention_backend,
+            piecewise_post_mode=args.piecewise_post_mode,
             warmup=args.warmup,
             iterations=args.iterations,
             reference=reference,
@@ -221,6 +321,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eps", type=float, default=DEFAULT_EPS)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dtype", choices=DTYPES, default="float16")
+    parser.add_argument(
+        "--attention-backend",
+        choices=ATTENTION_BACKENDS,
+        default="einsum",
+        help="Attention implementation used inside the synthetic decode step.",
+    )
+    parser.add_argument(
+        "--dynamic-copy-mode",
+        choices=DYNAMIC_COPY_MODES,
+        default="full",
+        help=(
+            "Input staging for dynamic piecewise graph replay. full copies x and "
+            "active KV cache slices; x-only models resident KV cache by staging only x."
+        ),
+    )
+    parser.add_argument(
+        "--piecewise-post-mode",
+        choices=PIECEWISE_POST_MODES,
+        default="graph",
+        help="Post-attention add mode for piecewise CUDA Graph replay.",
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--warmup", type=int, default=25)
     parser.add_argument("--iterations", type=int, default=100)
@@ -284,6 +405,7 @@ def selected_modes(
     if dynamic_trace:
         modes = ["dynamic-eager"]
         if device == "cuda" and fused_available:
+            modes.append("dynamic-piecewise-graph-same-stream")
             modes.append("dynamic-piecewise-graph")
         return tuple(modes)
 
@@ -295,13 +417,14 @@ def selected_modes(
         if fused_available:
             modes.append("fused-graph")
             modes.append("fused-piecewise-graph")
+            modes.append("fused-piecewise-graph-same-stream")
     return tuple(modes)
 
 
 def ensure_mode_available(mode: str, *, device: str, fused_available: bool) -> None:
     if mode == "dynamic-eager":
         return
-    if mode == "dynamic-piecewise-graph":
+    if mode in DYNAMIC_PIECEWISE_MODES:
         if device != "cuda":
             raise SystemExit("Dynamic piecewise CUDA Graph replay requires --device cuda.")
         if not fused_available:
@@ -311,7 +434,10 @@ def ensure_mode_available(mode: str, *, device: str, fused_available: bool) -> N
         return
 
     kernel_strategy, launch_strategy = split_mode(mode)
-    if launch_strategy in {"graph", "piecewise_graph"} and device != "cuda":
+    if (
+        launch_strategy in ("graph", *PIECEWISE_LAUNCH_STRATEGIES)
+        and device != "cuda"
+    ):
         raise SystemExit("CUDA Graph replay modes require --device cuda.")
     if kernel_strategy == "fused" and device != "cuda":
         raise SystemExit("Fused decode-step modes require --device cuda.")
@@ -324,6 +450,8 @@ def ensure_mode_available(mode: str, *, device: str, fused_available: bool) -> N
 def split_mode(mode: str) -> tuple[str, str]:
     if mode == "fused-piecewise-graph":
         return "fused", "piecewise_graph"
+    if mode == "fused-piecewise-graph-same-stream":
+        return "fused", "piecewise_graph_same_stream"
     try:
         kernel_strategy, launch_strategy = mode.split("-", maxsplit=1)
     except ValueError as exc:
@@ -331,6 +459,28 @@ def split_mode(mode: str) -> tuple[str, str]:
     if kernel_strategy not in {"naive", "fused"} or launch_strategy not in {"eager", "graph"}:
         raise ValueError(f"unknown decode-step mode: {mode}")
     return kernel_strategy, launch_strategy
+
+
+def piecewise_stream_strategy(launch_strategy: str) -> str:
+    """Return the graph stream capture strategy for a piecewise launch strategy."""
+
+    if launch_strategy == "piecewise_graph_same_stream":
+        return "same_stream"
+    if launch_strategy == "piecewise_graph":
+        return "ordered"
+    raise ValueError(f"not a piecewise launch strategy: {launch_strategy}")
+
+
+def dynamic_launch_strategy(mode: str) -> str:
+    """Return the launch strategy represented by a dynamic decode-step mode."""
+
+    if mode == "dynamic-piecewise-graph-same-stream":
+        return "piecewise_graph_same_stream"
+    if mode == "dynamic-piecewise-graph":
+        return "piecewise_graph"
+    if mode == "dynamic-eager":
+        return "eager"
+    raise ValueError(f"unknown dynamic decode-step mode: {mode}")
 
 
 def validate_shape(
@@ -479,6 +629,8 @@ def run_one(
     dtype: Any,
     device: str,
     eps: float,
+    attention_backend: str,
+    piecewise_post_mode: str,
     warmup: int,
     iterations: int,
     reference: Any | None,
@@ -494,16 +646,25 @@ def run_one(
         device=device,
         fused_available=(kernel_strategy != "fused" or triton_fused_available()),
     )
-    if launch_strategy == "piecewise_graph":
+    if launch_strategy in PIECEWISE_LAUNCH_STRATEGIES:
         runtime = prepare_piecewise_graph_runtime(
             torch=torch,
             inputs=inputs,
             eps=eps,
+            attention_backend=attention_backend,
+            post_mode=piecewise_post_mode,
             warmup=warmup,
+            stream_strategy=piecewise_stream_strategy(launch_strategy),
         )
         benchmark_fn = runtime.replay
     else:
-        raw_fn = build_decode_step_op(torch, inputs, kernel_strategy, eps)
+        raw_fn = build_decode_step_op(
+            torch,
+            inputs,
+            kernel_strategy,
+            eps,
+            attention_backend=attention_backend,
+        )
         benchmark_fn = prepare_launch_callable(
             torch=torch,
             fn=raw_fn,
@@ -539,7 +700,9 @@ def run_one(
     metrics = timing_metrics(
         timings,
         tokens_per_step=batch_size,
-        graph_replay=launch_strategy in {"graph", "piecewise_graph"},
+        graph_replay=(
+            launch_strategy in ("graph", *PIECEWISE_LAUNCH_STRATEGIES)
+        ),
     )
 
     return BenchmarkResult(
@@ -565,10 +728,11 @@ def run_one(
             num_heads=num_heads,
             head_dim=head_dim,
         ),
-        strategy=f"{kernel_strategy}-{launch_strategy}",
+        strategy=mode,
         variant=(
             f"mode={mode}, batch_size={batch_size}, seq_len={seq_len}, "
-            f"hidden_dim={hidden_dim}, intermediate_dim={intermediate_dim}"
+            f"hidden_dim={hidden_dim}, intermediate_dim={intermediate_dim}, "
+            f"attention={attention_backend}, post={piecewise_post_mode}"
         ),
         parameters={
             "mode": mode,
@@ -581,6 +745,8 @@ def run_one(
             "num_heads": num_heads,
             "head_dim": head_dim,
             "eps": eps,
+            "attention_backend": attention_backend,
+            "piecewise_post_mode": piecewise_post_mode,
         },
         metrics=metrics,
         optimization=decode_step_optimization(
@@ -601,8 +767,11 @@ def run_dynamic_trace(
     dtype: Any,
     device: str,
     eps: float,
+    attention_backend: str,
     warmup: int,
     reference_checks: bool,
+    dynamic_copy_mode: str,
+    piecewise_post_mode: str,
 ) -> BenchmarkResult:
     """Replay a synthetic dynamic batching trace."""
 
@@ -612,50 +781,103 @@ def run_dynamic_trace(
         raise ValueError("trace must include at least one step")
     if mode not in DYNAMIC_MODES:
         raise ValueError(f"unknown dynamic decode-step mode: {mode}")
+    if dynamic_copy_mode not in DYNAMIC_COPY_MODES:
+        raise ValueError(f"unknown dynamic copy mode: {dynamic_copy_mode}")
+    if piecewise_post_mode not in PIECEWISE_POST_MODES:
+        raise ValueError(f"unknown piecewise post mode: {piecewise_post_mode}")
 
     kernel_strategy = "fused" if device == "cuda" and triton_fused_available() else "naive"
-    if mode == "dynamic-piecewise-graph":
+    launch_strategy = dynamic_launch_strategy(mode)
+    if mode in DYNAMIC_PIECEWISE_MODES:
         ensure_mode_available(mode, device=device, fused_available=triton_fused_available())
         graph_cache = build_piecewise_graph_cache(
             torch=torch,
             inputs=inputs,
             batch_buckets=batch_buckets,
             eps=eps,
+            attention_backend=attention_backend,
+            post_mode=piecewise_post_mode,
             warmup=warmup,
+            stream_strategy=piecewise_stream_strategy(launch_strategy),
         )
 
-        def run_step(step: TraceStep) -> bool:
+        def run_step(step: TraceStep) -> DynamicStepResult:
+            region_start = perf_counter()
             bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
             runtime = graph_cache[bucket]
-            copy_trace_step_inputs(inputs, runtime.inputs, step=step)
-            runtime.replay(active_batch_size=step.active_batch_size, seq_len=step.seq_len)
-            return True
+            scheduler_ms = (perf_counter() - region_start) * 1_000
+            copy_regions = copy_trace_step_inputs(
+                inputs,
+                runtime.inputs,
+                step=step,
+                copy_mode=dynamic_copy_mode,
+            )
+            _, regions_ms = runtime.replay_with_stage_timing(
+                active_batch_size=step.active_batch_size,
+                seq_len=step.seq_len,
+            )
+            return DynamicStepResult(
+                graph_hit=True,
+                regions_ms={
+                    "scheduler_decision_host_ms": scheduler_ms,
+                    **copy_regions,
+                    **regions_ms,
+                },
+            )
 
         graph_replay = True
-        launch_strategy = "piecewise_graph"
     else:
 
-        def run_step(step: TraceStep) -> bool:
+        def run_step(step: TraceStep) -> DynamicStepResult:
+            region_start = perf_counter()
             step_inputs = slice_trace_step_inputs(inputs, step=step)
-            fn = build_decode_step_op(torch, step_inputs, kernel_strategy, eps)
+            fn = build_decode_step_op(
+                torch,
+                step_inputs,
+                kernel_strategy,
+                eps,
+                attention_backend=attention_backend,
+            )
+            build_ms = (perf_counter() - region_start) * 1_000
+            region_start = perf_counter()
             fn()
-            return False
+            run_ms = (perf_counter() - region_start) * 1_000
+            return DynamicStepResult(
+                graph_hit=False,
+                regions_ms={
+                    "eager_build_host_ms": build_ms,
+                    "eager_run_host_ms": run_ms,
+                },
+            )
 
         graph_replay = False
-        launch_strategy = "eager"
 
     correctness = None
-    if reference_checks and mode == "dynamic-piecewise-graph":
-        correctness = check_dynamic_piecewise_correctness(
-            torch=torch,
-            inputs=inputs,
-            graph_cache=graph_cache,
-            trace=trace,
-            batch_buckets=batch_buckets,
-            eps=eps,
-            dtype=dtype,
-            kernel_strategy=kernel_strategy,
-        )
+    if reference_checks:
+        if mode in DYNAMIC_PIECEWISE_MODES:
+            correctness = check_dynamic_piecewise_correctness(
+                torch=torch,
+                inputs=inputs,
+                graph_cache=graph_cache,
+                trace=trace,
+                batch_buckets=batch_buckets,
+                eps=eps,
+                attention_backend=attention_backend,
+                dynamic_copy_mode=dynamic_copy_mode,
+                piecewise_post_mode=piecewise_post_mode,
+                dtype=dtype,
+            )
+        else:
+            correctness = check_dynamic_eager_correctness(
+                torch=torch,
+                inputs=inputs,
+                trace=trace,
+                batch_buckets=batch_buckets,
+                kernel_strategy=kernel_strategy,
+                eps=eps,
+                attention_backend=attention_backend,
+                dtype=dtype,
+            )
 
     dynamic_loop = benchmark_dynamic_timed_loop(
         torch=torch,
@@ -702,7 +924,9 @@ def run_dynamic_trace(
         strategy=mode,
         variant=(
             f"mode={mode}, max_batch_size={batch_size}, seq_len={max_seq_len}, "
-            f"buckets={','.join(str(bucket) for bucket in batch_buckets)}"
+            f"buckets={','.join(str(bucket) for bucket in batch_buckets)}, "
+            f"attention={attention_backend}, copy={dynamic_copy_mode}, "
+            f"post={piecewise_post_mode}"
         ),
         parameters={
             "mode": mode,
@@ -718,6 +942,9 @@ def run_dynamic_trace(
             "head_dim": head_dim,
             "trace_steps": len(trace),
             "eps": eps,
+            "attention_backend": attention_backend,
+            "dynamic_copy_mode": dynamic_copy_mode,
+            "piecewise_post_mode": piecewise_post_mode,
         },
         metrics=metrics,
         optimization=decode_step_optimization(
@@ -734,7 +961,10 @@ def build_piecewise_graph_cache(
     inputs: DecodeStepInputs,
     batch_buckets: tuple[int, ...],
     eps: float,
+    attention_backend: str,
+    post_mode: str,
     warmup: int,
+    stream_strategy: str = "ordered",
 ) -> dict[int, PiecewiseGraphRuntime]:
     """Capture one piecewise graph runtime per dynamic batch bucket."""
 
@@ -756,7 +986,10 @@ def build_piecewise_graph_cache(
             torch=torch,
             inputs=bucket_inputs,
             eps=eps,
+            attention_backend=attention_backend,
+            post_mode=post_mode,
             warmup=warmup,
+            stream_strategy=stream_strategy,
         )
     return cache
 
@@ -793,14 +1026,94 @@ def copy_trace_step_inputs(
     target: DecodeStepInputs,
     *,
     step: TraceStep,
-) -> None:
+    copy_mode: str = "full",
+) -> dict[str, float]:
     """Copy active trace tensors into static bucket buffers before graph replay."""
 
     active = step.active_batch_size
     length = step.seq_len
+
+    region_start = perf_counter()
     target.x[:active].copy_(source.x[:active])
-    target.key_cache[:active, :length].copy_(source.key_cache[:active, :length])
-    target.value_cache[:active, :length].copy_(source.value_cache[:active, :length])
+    if active < target.x.shape[0]:
+        target.x[active:].zero_()
+    x_copy_ms = (perf_counter() - region_start) * 1_000
+    regions = {"input_x_copy_host_ms": x_copy_ms}
+
+    if copy_mode == "full":
+        region_start = perf_counter()
+        target.key_cache[:active, :length].copy_(source.key_cache[:active, :length])
+        target.value_cache[:active, :length].copy_(source.value_cache[:active, :length])
+        regions["input_kv_copy_host_ms"] = (perf_counter() - region_start) * 1_000
+    elif copy_mode != "x-only":
+        raise ValueError(f"unknown dynamic copy mode: {copy_mode}")
+
+    regions["input_copy_host_ms"] = sum(regions.values())
+    return regions
+
+
+def check_dynamic_eager_correctness(
+    *,
+    torch: Any,
+    inputs: DecodeStepInputs,
+    trace: tuple[TraceStep, ...],
+    batch_buckets: tuple[int, ...],
+    kernel_strategy: str,
+    eps: float,
+    attention_backend: str,
+    dtype: Any,
+) -> CorrectnessResult:
+    """Compare representative dynamic eager steps against naive eager references."""
+
+    rtol, atol = correctness_tolerance(dtype)
+    results = []
+
+    for step_index, step in representative_trace_steps(trace, batch_buckets=batch_buckets):
+        step_inputs = slice_trace_step_inputs(inputs, step=step)
+        actual = build_decode_step_op(
+            torch,
+            step_inputs,
+            kernel_strategy,
+            eps,
+            attention_backend=attention_backend,
+        )()
+        reference = build_decode_step_op(
+            torch,
+            step_inputs,
+            "naive",
+            eps,
+            attention_backend=attention_backend,
+        )()
+        result = check_tensors_close(
+            actual,
+            reference,
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+            reference_backend="naive",
+        )
+        if not result.passed:
+            return _annotate_dynamic_correctness_failure(
+                result,
+                step_index=step_index,
+                step=step,
+                bucket=choose_batch_bucket(step.active_batch_size, batch_buckets),
+                reference_strategy="naive",
+                comparison=f"{kernel_strategy}_eager_vs_naive_eager",
+            )
+        results.append(result)
+
+    return _aggregate_dynamic_correctness(
+        results,
+        reference_backend="naive",
+        message=(
+            "checked "
+            f"{len(results)} representative dynamic eager step(s) "
+            "against naive eager"
+        ),
+        atol=atol,
+        rtol=rtol,
+    )
 
 
 def check_dynamic_piecewise_correctness(
@@ -811,26 +1124,201 @@ def check_dynamic_piecewise_correctness(
     trace: tuple[TraceStep, ...],
     batch_buckets: tuple[int, ...],
     eps: float,
+    attention_backend: str,
+    dynamic_copy_mode: str,
+    piecewise_post_mode: str,
     dtype: Any,
-    kernel_strategy: str,
 ) -> Any:
-    """Compare the first dynamic piecewise replay against the matching eager path."""
+    """Compare representative dynamic piecewise replays against eager references."""
 
-    step = trace[0]
-    bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
-    runtime = graph_cache[bucket]
-    copy_trace_step_inputs(inputs, runtime.inputs, step=step)
-    actual = runtime.replay(active_batch_size=step.active_batch_size, seq_len=step.seq_len)
-    reference_inputs = slice_trace_step_inputs(inputs, step=step)
-    reference = build_decode_step_op(torch, reference_inputs, kernel_strategy, eps)()
     rtol, atol = correctness_tolerance(dtype)
-    return check_tensors_close(
-        actual,
-        reference,
-        torch=torch,
-        rtol=rtol,
+    results = []
+
+    for step_index, step in representative_trace_steps(trace, batch_buckets=batch_buckets):
+        bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
+        runtime = graph_cache[bucket]
+        copy_trace_step_inputs(
+            inputs,
+            runtime.inputs,
+            step=step,
+            copy_mode=dynamic_copy_mode,
+        )
+        actual = runtime.replay(
+            active_batch_size=step.active_batch_size,
+            seq_len=step.seq_len,
+        ).clone()
+        reference_inputs = slice_trace_step_inputs(inputs, step=step)
+        fused_components = fused_decode_step_components(
+            torch,
+            reference_inputs,
+            eps,
+            attention_backend=attention_backend,
+        )
+        fused_reference = fused_components["output"].clone()
+        piecewise_vs_fused = check_tensors_close(
+            actual,
+            fused_reference,
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+            reference_backend="fused",
+        )
+        if not piecewise_vs_fused.passed:
+            return _annotate_dynamic_correctness_failure(
+                piecewise_vs_fused,
+                step_index=step_index,
+                step=step,
+                bucket=bucket,
+                reference_strategy="fused",
+                comparison="piecewise_graph_vs_fused_eager",
+                component_message=_piecewise_component_message(
+                    torch=torch,
+                    runtime=runtime,
+                    fused_components=fused_components,
+                    active_batch_size=step.active_batch_size,
+                    rtol=rtol,
+                    atol=atol,
+                ),
+            )
+
+        naive_reference = build_decode_step_op(
+            torch,
+            reference_inputs,
+            "naive",
+            eps,
+            attention_backend=attention_backend,
+        )()
+        fused_vs_naive = check_tensors_close(
+            fused_reference,
+            naive_reference,
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+            reference_backend="naive",
+        )
+        if not fused_vs_naive.passed:
+            return _annotate_dynamic_correctness_failure(
+                fused_vs_naive,
+                step_index=step_index,
+                step=step,
+                bucket=bucket,
+                reference_strategy="naive",
+                comparison="fused_eager_vs_naive_eager",
+            )
+
+        results.extend((piecewise_vs_fused, fused_vs_naive))
+
+    return _aggregate_dynamic_correctness(
+        results,
+        reference_backend="fused+naive",
+        message=(
+            "checked "
+            f"{len(results) // 2} representative dynamic trace step(s) "
+            "against fused and naive eager"
+        ),
         atol=atol,
+        rtol=rtol,
     )
+
+
+def _aggregate_dynamic_correctness(
+    results: list[CorrectnessResult],
+    *,
+    reference_backend: str,
+    message: str,
+    atol: float,
+    rtol: float,
+) -> CorrectnessResult:
+    max_abs_error = max((result.max_abs_error or 0.0) for result in results)
+    max_rel_error = max((result.max_rel_error or 0.0) for result in results)
+    return CorrectnessResult(
+        checked=True,
+        passed=True,
+        reference_backend=reference_backend,
+        max_abs_error=max_abs_error,
+        max_rel_error=max_rel_error,
+        atol=atol,
+        rtol=rtol,
+        message=message,
+    )
+
+
+def representative_trace_steps(
+    trace: tuple[TraceStep, ...],
+    *,
+    batch_buckets: tuple[int, ...],
+) -> tuple[tuple[int, TraceStep], ...]:
+    """Return a compact correctness sample covering the configured graph buckets."""
+
+    selected: dict[int, tuple[int, TraceStep]] = {}
+    for index, step in enumerate(trace):
+        bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
+        selected.setdefault(bucket, (index, step))
+        if len(selected) == len(batch_buckets):
+            break
+    return tuple(selected[bucket] for bucket in batch_buckets if bucket in selected)
+
+
+def _annotate_dynamic_correctness_failure(
+    result: CorrectnessResult,
+    *,
+    step_index: int,
+    step: TraceStep,
+    bucket: int,
+    reference_strategy: str,
+    comparison: str,
+    component_message: str | None = None,
+) -> CorrectnessResult:
+    detail = (
+        f"comparison={comparison}, step={step_index}, phase={step.phase}, "
+        f"active_batch_size={step.active_batch_size}, "
+        f"seq_len={step.seq_len}, bucket={bucket}, reference={reference_strategy}"
+    )
+    message = f"{detail}; {result.message}" if result.message else detail
+    if component_message is not None:
+        message = f"{message}; {component_message}"
+    return CorrectnessResult(
+        checked=True,
+        passed=False,
+        reference_backend=reference_strategy,
+        max_abs_error=result.max_abs_error,
+        max_rel_error=result.max_rel_error,
+        atol=result.atol,
+        rtol=result.rtol,
+        message=message,
+    )
+
+
+def _piecewise_component_message(
+    *,
+    torch: Any,
+    runtime: PiecewiseGraphRuntime,
+    fused_components: dict[str, Any],
+    active_batch_size: int,
+    rtol: float,
+    atol: float,
+) -> str:
+    comparisons = {
+        "q_flat": runtime.q_flat[:active_batch_size],
+        "context_flat": runtime.context_flat[:active_batch_size],
+        "ff": runtime.ff[:active_batch_size, : runtime.q_flat.shape[1]],
+        "output": runtime.output[:active_batch_size],
+    }
+    parts = []
+    for name, actual in comparisons.items():
+        result = check_tensors_close(
+            actual,
+            fused_components[name],
+            torch=torch,
+            rtol=rtol,
+            atol=atol,
+            reference_backend="fused",
+        )
+        parts.append(
+            f"{name}:passed={result.passed},max_abs={result.max_abs_error},"
+            f"max_rel={result.max_rel_error}"
+        )
+    return "components=" + "|".join(parts)
 
 
 def build_decode_step_op(
@@ -838,15 +1326,33 @@ def build_decode_step_op(
     inputs: DecodeStepInputs,
     kernel_strategy: str,
     eps: float,
+    *,
+    attention_backend: str = "einsum",
 ) -> Callable[[], Any]:
     if kernel_strategy == "naive":
-        return lambda: naive_decode_step(torch, inputs, eps)
+        return lambda: naive_decode_step(
+            torch,
+            inputs,
+            eps,
+            attention_backend=attention_backend,
+        )
     if kernel_strategy == "fused":
-        return lambda: fused_decode_step(torch, inputs, eps)
+        return lambda: fused_decode_step(
+            torch,
+            inputs,
+            eps,
+            attention_backend=attention_backend,
+        )
     raise ValueError(f"unknown kernel strategy: {kernel_strategy}")
 
 
-def naive_decode_step(torch: Any, inputs: DecodeStepInputs, eps: float) -> Any:
+def naive_decode_step(
+    torch: Any,
+    inputs: DecodeStepInputs,
+    eps: float,
+    *,
+    attention_backend: str = "einsum",
+) -> Any:
     squared = inputs.x.pow(2)
     variance = squared.mean(dim=-1, keepdim=True)
     inv_rms = torch.rsqrt(variance + eps)
@@ -854,7 +1360,13 @@ def naive_decode_step(torch: Any, inputs: DecodeStepInputs, eps: float) -> Any:
     normalized = normalized * inputs.rms_weight
     q_flat = normalized @ inputs.q_weight
     query = _query_view(q_flat, inputs)
-    context = _decode_attention_batched(torch, query, inputs.key_cache, inputs.value_cache)
+    context = _decode_attention_batched(
+        torch,
+        query,
+        inputs.key_cache,
+        inputs.value_cache,
+        backend=attention_backend,
+    )
     gate = normalized @ inputs.gate_weight
     up = normalized @ inputs.up_weight
     sigmoid = gate.sigmoid()
@@ -863,18 +1375,52 @@ def naive_decode_step(torch: Any, inputs: DecodeStepInputs, eps: float) -> Any:
     return context.flatten(start_dim=1) + ff[:, : q_flat.shape[1]]
 
 
-def fused_decode_step(torch: Any, inputs: DecodeStepInputs, eps: float) -> Any:
+def fused_decode_step(
+    torch: Any,
+    inputs: DecodeStepInputs,
+    eps: float,
+    *,
+    attention_backend: str = "einsum",
+) -> Any:
+    return fused_decode_step_components(
+        torch,
+        inputs,
+        eps,
+        attention_backend=attention_backend,
+    )["output"]
+
+
+def fused_decode_step_components(
+    torch: Any,
+    inputs: DecodeStepInputs,
+    eps: float,
+    *,
+    attention_backend: str = "einsum",
+) -> dict[str, Any]:
     from cuda_kernel_lab.kernels.triton import rmsnorm, swiglu
 
     normalized = torch.empty_like(inputs.x)
     rmsnorm(inputs.x, inputs.rms_weight, eps=eps, out=normalized)
     q_flat = normalized @ inputs.q_weight
     query = _query_view(q_flat, inputs)
-    context = _decode_attention_batched(torch, query, inputs.key_cache, inputs.value_cache)
+    context = _decode_attention_batched(
+        torch,
+        query,
+        inputs.key_cache,
+        inputs.value_cache,
+        backend=attention_backend,
+    )
     gate = normalized @ inputs.gate_weight
     up = normalized @ inputs.up_weight
     ff = swiglu(gate, up)
-    return context.flatten(start_dim=1) + ff[:, : q_flat.shape[1]]
+    context_flat = context.flatten(start_dim=1)
+    ff_flat = ff[:, : q_flat.shape[1]]
+    return {
+        "q_flat": q_flat,
+        "context_flat": context_flat,
+        "ff": ff_flat,
+        "output": context_flat + ff_flat,
+    }
 
 
 def _query_view(q_flat: Any, inputs: DecodeStepInputs) -> Any:
@@ -884,11 +1430,56 @@ def _query_view(q_flat: Any, inputs: DecodeStepInputs) -> Any:
     return q_flat.reshape(batch_size, num_heads, head_dim)
 
 
-def _decode_attention_batched(torch: Any, query: Any, key_cache: Any, value_cache: Any) -> Any:
+def _decode_attention_batched(
+    torch: Any,
+    query: Any,
+    key_cache: Any,
+    value_cache: Any,
+    *,
+    backend: str = "einsum",
+) -> Any:
+    return _decode_attention_batched_backend(
+        torch,
+        query,
+        key_cache,
+        value_cache,
+        backend=backend,
+    )
+
+
+def _decode_attention_batched_backend(
+    torch: Any,
+    query: Any,
+    key_cache: Any,
+    value_cache: Any,
+    *,
+    backend: str,
+) -> Any:
+    if backend == "einsum":
+        return _decode_attention_einsum(torch, query, key_cache, value_cache)
+    if backend == "sdpa":
+        return _decode_attention_sdpa(torch, query, key_cache, value_cache)
+    raise ValueError(f"unknown attention backend: {backend}")
+
+
+def _decode_attention_einsum(torch: Any, query: Any, key_cache: Any, value_cache: Any) -> Any:
     scale = query.shape[-1] ** -0.5
     scores = torch.einsum("bhd,bshd->bhs", query.float(), key_cache.float()) * scale
     probs = scores.softmax(dim=-1).to(dtype=query.dtype)
     return torch.einsum("bhs,bshd->bhd", probs, value_cache)
+
+
+def _decode_attention_sdpa(torch: Any, query: Any, key_cache: Any, value_cache: Any) -> Any:
+    q = query.unsqueeze(2)
+    k = key_cache.transpose(1, 2)
+    v = value_cache.transpose(1, 2)
+    return torch.nn.functional.scaled_dot_product_attention(
+        q,
+        k,
+        v,
+        dropout_p=0.0,
+        is_causal=False,
+    ).squeeze(2)
 
 
 def prepare_launch_callable(
@@ -926,11 +1517,18 @@ def prepare_piecewise_graph_runtime(
     inputs: DecodeStepInputs,
     eps: float,
     warmup: int,
+    attention_backend: str = "einsum",
+    post_mode: str = "graph",
+    stream_strategy: str = "ordered",
 ) -> PiecewiseGraphRuntime:
     """Capture static fused pre/post regions around eager dynamic attention."""
 
     if not torch.cuda.is_available():
         raise SystemExit("Piecewise CUDA Graph replay requires a CUDA-capable PyTorch runtime.")
+    if stream_strategy not in {"ordered", "same_stream"}:
+        raise ValueError("stream_strategy must be one of ordered, same_stream")
+    if post_mode not in PIECEWISE_POST_MODES:
+        raise ValueError("post_mode must be one of graph, eager")
 
     from cuda_kernel_lab.kernels.triton import rmsnorm, swiglu
 
@@ -959,6 +1557,82 @@ def prepare_piecewise_graph_runtime(
     def post_region() -> None:
         torch.add(context_flat, ff[:, :attention_dim], out=output)
 
+    graph_stream = None
+    if stream_strategy == "ordered":
+        graph_stream = torch.cuda.Stream()
+        current_stream = torch.cuda.current_stream()
+        graph_stream.wait_stream(current_stream)
+        with torch.cuda.stream(graph_stream):
+            _warm_piecewise_regions(
+                torch=torch,
+                inputs=inputs,
+                q_flat=q_flat,
+                context_flat=context_flat,
+                attention_backend=attention_backend,
+                pre_region=pre_region,
+                post_region=post_region,
+                warmup=warmup,
+            )
+        graph_stream.synchronize()
+
+        pre_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(pre_graph, stream=graph_stream):
+            pre_region()
+        post_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(post_graph, stream=graph_stream):
+            post_region()
+        current_stream.wait_stream(graph_stream)
+    else:
+        _warm_piecewise_regions(
+            torch=torch,
+            inputs=inputs,
+            q_flat=q_flat,
+            context_flat=context_flat,
+            attention_backend=attention_backend,
+            pre_region=pre_region,
+            post_region=post_region,
+            warmup=warmup,
+        )
+        torch.cuda.synchronize()
+
+        pre_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(pre_graph):
+            pre_region()
+        post_graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(post_graph):
+            post_region()
+
+    # CUDA Graph replay uses captured tensor addresses, so every scratch buffer
+    # referenced by the captured regions must stay alive with the runtime.
+    return PiecewiseGraphRuntime(
+        torch=torch,
+        inputs=inputs,
+        normalized=normalized,
+        q_flat=q_flat,
+        context_flat=context_flat,
+        gate=gate,
+        up=up,
+        ff=ff,
+        output=output,
+        pre_graph=pre_graph,
+        post_graph=post_graph,
+        graph_stream=graph_stream,
+        attention_backend=attention_backend,
+        post_mode=post_mode,
+    )
+
+
+def _warm_piecewise_regions(
+    *,
+    torch: Any,
+    inputs: DecodeStepInputs,
+    q_flat: Any,
+    context_flat: Any,
+    attention_backend: str,
+    pre_region: Callable[[], None],
+    post_region: Callable[[], None],
+    warmup: int,
+) -> None:
     for _ in range(max(1, min(warmup, 3))):
         pre_region()
         context = _decode_attention_batched(
@@ -966,27 +1640,10 @@ def prepare_piecewise_graph_runtime(
             _query_view(q_flat, inputs),
             inputs.key_cache,
             inputs.value_cache,
+            backend=attention_backend,
         )
         context_flat.copy_(context.flatten(start_dim=1))
         post_region()
-    torch.cuda.synchronize()
-
-    pre_graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(pre_graph):
-        pre_region()
-    post_graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(post_graph):
-        post_region()
-
-    return PiecewiseGraphRuntime(
-        torch=torch,
-        inputs=inputs,
-        q_flat=q_flat,
-        context_flat=context_flat,
-        output=output,
-        pre_graph=pre_graph,
-        post_graph=post_graph,
-    )
 
 
 def benchmark_timed_loop(
@@ -1005,17 +1662,19 @@ def benchmark_timed_loop(
     device_latencies_ms: list[float] = []
     cpu_latencies_ms: list[float] = []
     use_cuda_events = device == "cuda" and torch.cuda.is_available()
+    start_event = end_event = None
+    if use_cuda_events:
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
     for _ in range(iterations):
         host_start = perf_counter()
         cpu_start = process_time()
         if use_cuda_events:
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            start.record()
+            start_event.record()
             fn()
-            end.record()
-            end.synchronize()
-            device_ms = float(start.elapsed_time(end))
+            end_event.record()
+            end_event.synchronize()
+            device_ms = float(start_event.elapsed_time(end_event))
         else:
             fn()
             _synchronize(torch, device)
@@ -1036,7 +1695,7 @@ def benchmark_timed_loop(
 def benchmark_dynamic_timed_loop(
     *,
     torch: Any,
-    run_step: Callable[[TraceStep], bool],
+    run_step: Callable[[TraceStep], bool | DynamicStepResult],
     trace: tuple[TraceStep, ...],
     device: str,
     warmup: int,
@@ -1051,22 +1710,25 @@ def benchmark_dynamic_timed_loop(
     device_latencies_ms: list[float] = []
     cpu_latencies_ms: list[float] = []
     scheduler_cpu_latencies_ms: list[float] = []
+    region_latencies_ms: dict[str, list[float]] = {}
     graph_hits = 0
     use_cuda_events = device == "cuda" and torch.cuda.is_available()
+    start_event = end_event = None
+    if use_cuda_events:
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
     for step in trace:
         scheduler_cpu_start = process_time()
         host_start = perf_counter()
         cpu_start = process_time()
         if use_cuda_events:
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            start.record()
-            hit = run_step(step)
-            end.record()
-            end.synchronize()
-            device_ms = float(start.elapsed_time(end))
+            start_event.record()
+            step_result = _as_dynamic_step_result(run_step(step))
+            end_event.record()
+            end_event.synchronize()
+            device_ms = float(start_event.elapsed_time(end_event))
         else:
-            hit = run_step(step)
+            step_result = _as_dynamic_step_result(run_step(step))
             _synchronize(torch, device)
             device_ms = (perf_counter() - host_start) * 1_000
         cpu_ms = (process_time() - cpu_start) * 1_000
@@ -1076,7 +1738,9 @@ def benchmark_dynamic_timed_loop(
         device_latencies_ms.append(device_ms)
         cpu_latencies_ms.append(cpu_ms)
         scheduler_cpu_latencies_ms.append(scheduler_cpu_ms)
-        graph_hits += int(hit)
+        graph_hits += int(step_result.graph_hit)
+        for region_name, region_ms in step_result.regions_ms.items():
+            region_latencies_ms.setdefault(region_name, []).append(region_ms)
 
     return DynamicTimedLoop(
         timings=TimedLoop(
@@ -1087,7 +1751,14 @@ def benchmark_dynamic_timed_loop(
         scheduler_cpu_latencies_ms=scheduler_cpu_latencies_ms,
         graph_hits=graph_hits,
         recapture_count=0,
+        region_latencies_ms=region_latencies_ms,
     )
+
+
+def _as_dynamic_step_result(value: bool | DynamicStepResult) -> DynamicStepResult:
+    if isinstance(value, DynamicStepResult):
+        return value
+    return DynamicStepResult(graph_hit=value)
 
 
 def timing_metrics(
@@ -1097,8 +1768,39 @@ def timing_metrics(
     graph_replay: bool,
 ) -> dict[str, float | int | bool]:
     host_p50 = percentile(timings.host_latencies_ms, 50)
+    host_p95 = percentile(timings.host_latencies_ms, 95)
+    host_p99 = percentile(timings.host_latencies_ms, 99)
     device_p50 = percentile(timings.device_latencies_ms, 50)
-    launch_overheads = [
+    launch_overheads = launch_overhead_latencies(timings)
+    launch_overhead_p50 = percentile(launch_overheads, 50)
+    total_host_s = sum(timings.host_latencies_ms) / 1_000
+    total_cpu_s = sum(timings.cpu_latencies_ms) / 1_000
+    cpu_utilization = (total_cpu_s / total_host_s * 100) if total_host_s > 0 else 0.0
+    tokens_per_second = tokens_per_step / (host_p50 / 1_000) if host_p50 > 0 else 0.0
+    return {
+        "host_p50_ms": host_p50,
+        "host_p95_ms": host_p95,
+        "host_p99_ms": host_p99,
+        "host_tail_ratio_p95_p50": host_p95 / host_p50 if host_p50 > 0 else 0.0,
+        "host_tail_ratio_p99_p50": host_p99 / host_p50 if host_p50 > 0 else 0.0,
+        "device_p50_ms": device_p50,
+        "device_p95_ms": percentile(timings.device_latencies_ms, 95),
+        "device_p99_ms": percentile(timings.device_latencies_ms, 99),
+        "launch_overhead_p50_ms": launch_overhead_p50,
+        "launch_overhead_p95_ms": percentile(launch_overheads, 95),
+        "launch_overhead_p99_ms": percentile(launch_overheads, 99),
+        "cpu_utilization_pct": cpu_utilization,
+        "tokens_per_second_p50": tokens_per_second,
+        "tokens_per_second_at_host_p95": (
+            tokens_per_step / (host_p95 / 1_000) if host_p95 > 0 else 0.0
+        ),
+        "tokens_per_step": tokens_per_step,
+        "graph_replay": graph_replay,
+    }
+
+
+def launch_overhead_latencies(timings: TimedLoop) -> list[float]:
+    return [
         max(host_ms - device_ms, 0.0)
         for host_ms, device_ms in zip(
             timings.host_latencies_ms,
@@ -1106,21 +1808,6 @@ def timing_metrics(
             strict=True,
         )
     ]
-    total_host_s = sum(timings.host_latencies_ms) / 1_000
-    total_cpu_s = sum(timings.cpu_latencies_ms) / 1_000
-    cpu_utilization = (total_cpu_s / total_host_s * 100) if total_host_s > 0 else 0.0
-    tokens_per_second = tokens_per_step / (host_p50 / 1_000) if host_p50 > 0 else 0.0
-    return {
-        "host_p50_ms": host_p50,
-        "device_p50_ms": device_p50,
-        "device_p95_ms": percentile(timings.device_latencies_ms, 95),
-        "device_p99_ms": percentile(timings.device_latencies_ms, 99),
-        "launch_overhead_p50_ms": percentile(launch_overheads, 50),
-        "cpu_utilization_pct": cpu_utilization,
-        "tokens_per_second_p50": tokens_per_second,
-        "tokens_per_step": tokens_per_step,
-        "graph_replay": graph_replay,
-    }
 
 
 def dynamic_timing_metrics(
@@ -1130,7 +1817,7 @@ def dynamic_timing_metrics(
     batch_buckets: tuple[int, ...],
     max_batch_size: int,
     graph_replay: bool,
-) -> dict[str, float | int | bool]:
+) -> dict[str, Any]:
     """Return timing plus synthetic scheduler metrics for a dynamic trace."""
 
     base = timing_metrics(
@@ -1140,6 +1827,7 @@ def dynamic_timing_metrics(
     )
     total_host_s = sum(dynamic_loop.timings.host_latencies_ms) / 1_000
     total_tokens = sum(step.active_batch_size for step in trace)
+    seq_lens = [step.seq_len for step in trace]
     padded_tokens = (
         sum(choose_batch_bucket(step.active_batch_size, batch_buckets) for step in trace)
         if graph_replay
@@ -1155,19 +1843,160 @@ def dynamic_timing_metrics(
                 (padded_tokens - total_tokens) / padded_tokens * 100 if padded_tokens else 0.0
             ),
             "recapture_count": dynamic_loop.recapture_count,
+            "host_step_cpu_time_ms": sum(dynamic_loop.scheduler_cpu_latencies_ms),
+            "host_step_cpu_p50_us": percentile(dynamic_loop.scheduler_cpu_latencies_ms, 50)
+            * 1_000,
+            "host_step_cpu_p95_us": percentile(dynamic_loop.scheduler_cpu_latencies_ms, 95)
+            * 1_000,
             "scheduler_cpu_time_ms": sum(dynamic_loop.scheduler_cpu_latencies_ms),
             "scheduler_cpu_p50_us": percentile(dynamic_loop.scheduler_cpu_latencies_ms, 50)
+            * 1_000,
+            "scheduler_cpu_p95_us": percentile(dynamic_loop.scheduler_cpu_latencies_ms, 95)
             * 1_000,
             "queue_wait_p50_ms": percentile([step.queue_wait_ms for step in trace], 50),
             "queue_wait_p95_ms": percentile([step.queue_wait_ms for step in trace], 95),
             "batch_occupancy_avg_pct": total_tokens / (len(trace) * max_batch_size) * 100,
+            "seq_len_min": min(seq_lens),
+            "seq_len_p50": percentile(seq_lens, 50),
+            "seq_len_p95": percentile(seq_lens, 95),
+            "seq_len_max": max(seq_lens),
             "decode_steps": phase_counts["decode"],
             "prefill_steps": phase_counts["prefill"],
             "mixed_steps": phase_counts["mixed"],
+            "phase_breakdown": {
+                phase: _dynamic_trace_breakdown(
+                    dynamic_loop=dynamic_loop,
+                    trace=trace,
+                    indices=[
+                        index for index, step in enumerate(trace) if step.phase == phase
+                    ],
+                    batch_buckets=batch_buckets,
+                    include_padding=None,
+                )
+                for phase in PHASES
+                if phase_counts[phase] > 0
+            },
+            "bucket_breakdown": {
+                str(bucket): _dynamic_trace_breakdown(
+                    dynamic_loop=dynamic_loop,
+                    trace=trace,
+                    indices=[
+                        index
+                        for index, step in enumerate(trace)
+                        if choose_batch_bucket(step.active_batch_size, batch_buckets) == bucket
+                    ],
+                    batch_buckets=batch_buckets,
+                    include_padding=graph_replay,
+                )
+                for bucket in batch_buckets
+                if any(
+                    choose_batch_bucket(step.active_batch_size, batch_buckets) == bucket
+                    for step in trace
+                )
+            },
+            "orchestration_breakdown": _region_timing_metrics(
+                dynamic_loop.region_latencies_ms
+            ),
         }
     )
+    scheduler_decision_latencies = dynamic_loop.region_latencies_ms.get(
+        "scheduler_decision_host_ms",
+        [],
+    )
+    if scheduler_decision_latencies:
+        base.update(
+            {
+                "scheduler_decision_p50_us": percentile(
+                    scheduler_decision_latencies,
+                    50,
+                )
+                * 1_000,
+                "scheduler_decision_p95_us": percentile(
+                    scheduler_decision_latencies,
+                    95,
+                )
+                * 1_000,
+            }
+        )
     base["tokens_per_second_p50"] = base["tokens_per_second"]
     return base
+
+
+def _dynamic_trace_breakdown(
+    *,
+    dynamic_loop: DynamicTimedLoop,
+    trace: tuple[TraceStep, ...],
+    indices: list[int],
+    batch_buckets: tuple[int, ...],
+    include_padding: bool | None,
+) -> dict[str, float | int]:
+    steps = [trace[index] for index in indices]
+    host_latencies = [dynamic_loop.timings.host_latencies_ms[index] for index in indices]
+    device_latencies = [dynamic_loop.timings.device_latencies_ms[index] for index in indices]
+    launch_overheads = launch_overhead_latencies(
+        TimedLoop(
+            host_latencies_ms=host_latencies,
+            device_latencies_ms=device_latencies,
+            cpu_latencies_ms=[dynamic_loop.timings.cpu_latencies_ms[index] for index in indices],
+        )
+    )
+    seq_lens = [step.seq_len for step in steps]
+    queue_waits = [step.queue_wait_ms for step in steps]
+    total_host_s = sum(host_latencies) / 1_000
+    total_tokens = sum(step.active_batch_size for step in steps)
+    host_p50 = percentile(host_latencies, 50)
+    host_p95 = percentile(host_latencies, 95)
+    host_p99 = percentile(host_latencies, 99)
+    metrics: dict[str, float | int] = {
+        "steps": len(steps),
+        "host_p50_ms": host_p50,
+        "host_p95_ms": host_p95,
+        "host_p99_ms": host_p99,
+        "host_tail_ratio_p95_p50": host_p95 / host_p50 if host_p50 > 0 else 0.0,
+        "host_tail_ratio_p99_p50": host_p99 / host_p50 if host_p50 > 0 else 0.0,
+        "device_p50_ms": percentile(device_latencies, 50),
+        "device_p95_ms": percentile(device_latencies, 95),
+        "device_p99_ms": percentile(device_latencies, 99),
+        "launch_overhead_p50_ms": percentile(launch_overheads, 50),
+        "launch_overhead_p95_ms": percentile(launch_overheads, 95),
+        "launch_overhead_p99_ms": percentile(launch_overheads, 99),
+        "active_batch_avg": total_tokens / len(steps),
+        "seq_len_p50": percentile(seq_lens, 50),
+        "seq_len_p95": percentile(seq_lens, 95),
+        "queue_wait_p50_ms": percentile(queue_waits, 50),
+        "tokens_per_second": total_tokens / total_host_s if total_host_s > 0 else 0.0,
+        "tokens_per_second_at_host_p95": (
+            total_tokens / (len(steps) * host_p95 / 1_000) if host_p95 > 0 else 0.0
+        ),
+    }
+    if include_padding is not None:
+        if include_padding:
+            padded_tokens = sum(
+                choose_batch_bucket(step.active_batch_size, batch_buckets)
+                for step in steps
+            )
+            metrics["padding_waste_pct"] = (
+                (padded_tokens - total_tokens) / padded_tokens * 100 if padded_tokens else 0.0
+            )
+        else:
+            metrics["padding_waste_pct"] = 0.0
+    return metrics
+
+
+def _region_timing_metrics(
+    region_latencies_ms: dict[str, list[float]],
+) -> dict[str, dict[str, float | int]]:
+    return {
+        region_name: {
+            "samples": len(values),
+            "total_host_ms": sum(values),
+            "host_p50_ms": percentile(values, 50),
+            "host_p95_ms": percentile(values, 95),
+            "host_p99_ms": percentile(values, 99),
+        }
+        for region_name, values in sorted(region_latencies_ms.items())
+        if values
+    }
 
 
 def average_trace_memory_traffic_bytes(

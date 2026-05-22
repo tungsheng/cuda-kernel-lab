@@ -42,6 +42,8 @@ class ReportRow:
     speedup_vs_torch: float | None
     noise_ratio: float | None
     correctness: str
+    parameters: dict[str, Any]
+    metrics: dict[str, Any]
     run: dict[str, Any]
     source: Path
 
@@ -158,6 +160,17 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             f"{_noise_label(row.noise_ratio)} |"
         )
 
+    dynamic_detail_lines = _dynamic_detail_lines(rows)
+    if dynamic_detail_lines:
+        lines.extend(
+            [
+                "",
+                "## Dynamic Trace Detail",
+                "",
+                *dynamic_detail_lines,
+            ]
+        )
+
     lines.extend(
         [
             "",
@@ -236,6 +249,9 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
     parameters = result.get("parameters")
     if not isinstance(parameters, dict):
         parameters = {}
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        metrics = {}
     strategy = str(result.get("strategy") or _strategy_label(backend))
     optimization = technique_from_mapping(result.get("optimization")) or technique_from_result(
         backend=backend,
@@ -262,6 +278,8 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
         speedup_vs_torch=None,
         noise_ratio=_ratio(float(result["p95_ms"]), float(result["p50_ms"])),
         correctness=_correctness_label(result.get("correctness")),
+        parameters=parameters,
+        metrics=metrics,
         run=run,
         source=source,
     )
@@ -299,6 +317,8 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
                 speedup_vs_torch=speedup,
                 noise_ratio=row.noise_ratio,
                 correctness=row.correctness,
+                parameters=row.parameters,
+                metrics=row.metrics,
                 run=row.run,
                 source=row.source,
             )
@@ -419,6 +439,174 @@ def _technique_takeaway_lines(rows: list[ReportRow]) -> list[str]:
     return lines or ["- No cataloged optimization techniques were found in this result set."]
 
 
+def _dynamic_detail_lines(rows: list[ReportRow]) -> list[str]:
+    dynamic_rows = [
+        row
+        for row in rows
+        if row.primitive == "decode_step" and isinstance(row.metrics.get("bucket_breakdown"), dict)
+    ]
+    if not dynamic_rows:
+        return []
+
+    lines: list[str] = []
+    tail_rows = _dynamic_tail_rows(dynamic_rows)
+    if tail_rows:
+        lines.extend(_tail_policy_summary_lines(tail_rows))
+        lines.append("")
+        lines.extend(
+            [
+                "### Tail Sweep",
+                "",
+                "| Strategy | Buckets | Seed | p50 ms | p95 ms | p99 ms | p95/p50 | "
+                "tok/s | tok/s @ p95 | scheduler p95 us | Pad % | Worst Bucket |",
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
+                "---: | ---: | --- |",
+            ]
+        )
+        for row in sorted(tail_rows, key=_dynamic_row_sort_key):
+            worst_bucket = _worst_bucket(row)
+            lines.append(
+                "| "
+                f"{_escape_cell(row.strategy)} | {_escape_cell(_bucket_policy_label(row))} | "
+                f"{_seed_label(row)} | {_fmt(row.p50_ms)} | {_fmt(row.p95_ms)} | "
+                f"{_fmt(row.p99_ms)} | "
+                f"{_fmt_metric(row.metrics, 'host_tail_ratio_p95_p50')} | "
+                f"{_fmt_metric(row.metrics, 'tokens_per_second')} | "
+                f"{_fmt_metric(row.metrics, 'tokens_per_second_at_host_p95')} | "
+                f"{_fmt_optional(_scheduler_p95_us(row.metrics))} | "
+                f"{_fmt_metric(row.metrics, 'padding_waste_pct')} | "
+                f"{_escape_cell(_worst_bucket_label(worst_bucket))} |"
+            )
+
+    worst_bucket_rows = _worst_bucket_rows(dynamic_rows)
+    if worst_bucket_rows:
+        if lines:
+            lines.append("")
+        lines.extend(
+            [
+                "### Worst Dynamic Buckets",
+                "",
+                "| Strategy | Source | Buckets | Seed | Bucket | Steps | p50 ms | p95 ms | "
+                "p99 ms | p95/p50 | Pad % |",
+                "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row, bucket, metrics in worst_bucket_rows[:10]:
+            lines.append(
+                "| "
+                f"{_escape_cell(row.strategy)} | `{row.source.name}` | "
+                f"{_escape_cell(_bucket_policy_label(row))} | {_seed_label(row)} | "
+                f"{bucket} | {_fmt_int_metric(metrics, 'steps')} | "
+                f"{_fmt_metric(metrics, 'host_p50_ms')} | "
+                f"{_fmt_metric(metrics, 'host_p95_ms')} | "
+                f"{_fmt_metric(metrics, 'host_p99_ms')} | "
+                f"{_fmt_metric(metrics, 'host_tail_ratio_p95_p50')} | "
+                f"{_fmt_metric(metrics, 'padding_waste_pct')} |"
+            )
+
+    orchestration_rows = _orchestration_rows(tail_rows or dynamic_rows)
+    if orchestration_rows:
+        if lines:
+            lines.append("")
+        lines.extend(
+            [
+                "### Host Orchestration",
+                "",
+                "| Strategy | Buckets | Seed | Region | Samples | p50 ms | p95 ms | "
+                "p99 ms | Total ms |",
+                "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row, region, metrics in orchestration_rows[:40]:
+            lines.append(
+                "| "
+                f"{_escape_cell(row.strategy)} | {_escape_cell(_bucket_policy_label(row))} | "
+                f"{_seed_label(row)} | {_escape_cell(region)} | "
+                f"{_fmt_int_metric(metrics, 'samples')} | "
+                f"{_fmt_metric(metrics, 'host_p50_ms')} | "
+                f"{_fmt_metric(metrics, 'host_p95_ms')} | "
+                f"{_fmt_metric(metrics, 'host_p99_ms')} | "
+                f"{_fmt_metric(metrics, 'total_host_ms')} |"
+            )
+
+    return lines
+
+
+def _tail_policy_summary_lines(rows: list[ReportRow]) -> list[str]:
+    groups: dict[str, list[ReportRow]] = {}
+    for row in rows:
+        groups.setdefault(_bucket_policy_label(row), []).append(row)
+
+    summary_rows = []
+    for bucket_policy, bucket_rows in groups.items():
+        worst_bucket_p95 = []
+        for row in bucket_rows:
+            worst_bucket = _worst_bucket(row)
+            if worst_bucket is None:
+                continue
+            _bucket, worst_metrics = worst_bucket
+            worst_bucket_p95.append(_numeric_metric(worst_metrics, "host_p95_ms"))
+        summary_rows.append(
+            (
+                bucket_policy,
+                len(bucket_rows),
+                _mean(row.p50_ms for row in bucket_rows),
+                _mean(row.p95_ms for row in bucket_rows),
+                _mean(row.p99_ms for row in bucket_rows),
+                _mean(
+                    value
+                    for row in bucket_rows
+                    if (value := _numeric_metric(row.metrics, "tokens_per_second")) is not None
+                ),
+                _mean(
+                    value
+                    for row in bucket_rows
+                    if (
+                        value := _numeric_metric(
+                            row.metrics,
+                            "tokens_per_second_at_host_p95",
+                        )
+                    )
+                    is not None
+                ),
+                _mean(
+                    value
+                    for row in bucket_rows
+                    if (value := _numeric_metric(row.metrics, "padding_waste_pct")) is not None
+                ),
+                _mean(value for value in worst_bucket_p95 if value is not None),
+            )
+        )
+
+    lines = [
+        "### Tail Policy Summary",
+        "",
+        "| Buckets | Runs | Avg p50 ms | Avg p95 ms | Avg p99 ms | Avg tok/s | "
+        "Avg tok/s @ p95 | Avg Pad % | Avg Worst Bucket p95 ms |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for (
+        bucket_policy,
+        run_count,
+        p50_ms,
+        p95_ms,
+        p99_ms,
+        tokens_per_second,
+        tokens_per_second_at_p95,
+        padding_waste_pct,
+        worst_bucket_p95_ms,
+    ) in sorted(summary_rows, key=lambda row: row[3]):
+        lines.append(
+            "| "
+            f"{_escape_cell(bucket_policy)} | {run_count} | {_fmt_optional(p50_ms)} | "
+            f"{_fmt_optional(p95_ms)} | {_fmt_optional(p99_ms)} | "
+            f"{_fmt_optional(tokens_per_second)} | "
+            f"{_fmt_optional(tokens_per_second_at_p95)} | "
+            f"{_fmt_optional(padding_waste_pct)} | {_fmt_optional(worst_bucket_p95_ms)} |"
+        )
+    return lines
+
+
 def _observation_lines(rows: list[ReportRow]) -> list[str]:
     sources = {row.source for row in rows}
     correctness = Counter(row.correctness for row in rows)
@@ -517,6 +705,145 @@ def _noisy_rows(rows: list[ReportRow]) -> list[ReportRow]:
     return sorted(noisy, key=lambda row: row.noise_ratio or 0, reverse=True)[:3]
 
 
+def _dynamic_tail_rows(rows: list[ReportRow]) -> list[ReportRow]:
+    return [row for row in rows if row.source.name == "decode-step-dynamic-tail.jsonl"]
+
+
+def _worst_bucket_rows(
+    rows: list[ReportRow],
+) -> list[tuple[ReportRow, str, dict[str, Any]]]:
+    worst_rows: list[tuple[ReportRow, str, dict[str, Any]]] = []
+    for row in rows:
+        worst = _worst_bucket(row)
+        if worst is not None:
+            bucket, metrics = worst
+            worst_rows.append((row, bucket, metrics))
+    return sorted(
+        worst_rows,
+        key=lambda item: _numeric_metric(item[2], "host_p95_ms") or 0.0,
+        reverse=True,
+    )
+
+
+def _worst_bucket(row: ReportRow) -> tuple[str, dict[str, Any]] | None:
+    breakdown = row.metrics.get("bucket_breakdown")
+    if not isinstance(breakdown, dict):
+        return None
+
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    for bucket, metrics in breakdown.items():
+        if isinstance(metrics, dict) and _numeric_metric(metrics, "host_p95_ms") is not None:
+            candidates.append((str(bucket), metrics))
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda item: (
+            _numeric_metric(item[1], "host_p95_ms") or 0.0,
+            _numeric_metric(item[1], "host_tail_ratio_p95_p50") or 0.0,
+        ),
+    )
+
+
+def _orchestration_rows(
+    rows: list[ReportRow],
+) -> list[tuple[ReportRow, str, dict[str, Any]]]:
+    entries: list[tuple[ReportRow, str, dict[str, Any]]] = []
+    for row in rows:
+        breakdown = row.metrics.get("orchestration_breakdown")
+        if not isinstance(breakdown, dict):
+            continue
+        for region, metrics in breakdown.items():
+            if isinstance(metrics, dict):
+                entries.append((row, str(region), metrics))
+    return sorted(
+        entries,
+        key=lambda item: (
+            _dynamic_row_sort_key(item[0]),
+            item[1],
+        ),
+    )
+
+
+def _dynamic_row_sort_key(row: ReportRow) -> tuple[str, str, int, str]:
+    return (row.source.name, _bucket_policy_label(row), _seed_sort_value(row), row.strategy)
+
+
+def _bucket_policy_label(row: ReportRow) -> str:
+    buckets = row.parameters.get("batch_buckets")
+    if isinstance(buckets, list | tuple):
+        return ",".join(str(bucket) for bucket in buckets)
+
+    args = row.run.get("args")
+    if isinstance(args, dict):
+        arg_buckets = args.get("batch_buckets")
+        if arg_buckets is not None:
+            return str(arg_buckets)
+    return ""
+
+
+def _seed_label(row: ReportRow) -> str:
+    seed = _seed_value(row)
+    return "" if seed is None else str(seed)
+
+
+def _seed_sort_value(row: ReportRow) -> int:
+    seed = _seed_value(row)
+    return -1 if seed is None else seed
+
+
+def _seed_value(row: ReportRow) -> int | None:
+    args = row.run.get("args")
+    if not isinstance(args, dict):
+        return None
+    seed = args.get("seed")
+    if isinstance(seed, bool):
+        return None
+    if isinstance(seed, int):
+        return seed
+    return None
+
+
+def _worst_bucket_label(value: tuple[str, dict[str, Any]] | None) -> str:
+    if value is None:
+        return ""
+    bucket, metrics = value
+    return f"{bucket} (p95 {_fmt_metric(metrics, 'host_p95_ms')} ms)"
+
+
+def _fmt_metric(metrics: dict[str, Any], key: str) -> str:
+    return _fmt_optional(_numeric_metric(metrics, key))
+
+
+def _scheduler_p95_us(metrics: dict[str, Any]) -> float | None:
+    value = _numeric_metric(metrics, "scheduler_decision_p95_us")
+    if value is not None:
+        return value
+    return _numeric_metric(metrics, "scheduler_cpu_p95_us")
+
+
+def _fmt_int_metric(metrics: dict[str, Any], key: str) -> str:
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return ""
+    return str(value)
+
+
+def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
+
+
+def _mean(values: Any) -> float | None:
+    numeric_values = [float(value) for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return sum(numeric_values) / len(numeric_values)
+
+
 def _counter_label(counter: Counter[str]) -> str:
     return ", ".join(f"{key} {count}" for key, count in sorted(counter.items()))
 
@@ -594,7 +921,16 @@ def _variant_label(run: dict[str, Any]) -> str:
         "swiglu": ("block_size",),
         "matmul": ("block_m", "block_n", "block_k"),
         "attention": ("seq_len", "num_heads", "head_dim"),
-        "decode_step": ("mode", "batch_size", "max_batch_size", "hidden_dim", "seq_len"),
+        "decode_step": (
+            "mode",
+            "batch_size",
+            "max_batch_size",
+            "hidden_dim",
+            "seq_len",
+            "attention_backend",
+            "dynamic_copy_mode",
+            "piecewise_post_mode",
+        ),
     }
     fields = []
     for key in strategy_fields.get(str(run.get("benchmark")), ()):

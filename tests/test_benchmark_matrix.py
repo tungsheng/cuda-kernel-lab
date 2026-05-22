@@ -222,6 +222,98 @@ def test_matrix_can_include_decode_step_graph_workflow() -> None:
     ) in command_lines
 
 
+def test_matrix_can_run_only_decode_step_workflow() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        only_decode_step=True,
+        include_vector_add_sweep=True,
+        include_reduction_sweep=True,
+        include_matmul_sweep=True,
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert len(entries) == 2
+    assert all("benchmark-memory" not in line for line in command_lines)
+    assert all("benchmark-matmul" not in line for line in command_lines)
+    assert (
+        "uv run benchmark-decode-step --mode all --device cuda --dtype float16 "
+        "--warmup 25 --iterations 100 --output results/decode-step.jsonl"
+    ) in command_lines
+    assert (
+        "uv run benchmark-decode-step --dynamic-trace --mode all --device cuda "
+        "--dtype float16 --warmup 25 --iterations 100 "
+        "--output results/decode-step-dynamic.jsonl"
+    ) in command_lines
+
+
+def test_matrix_can_include_decode_bucket_sweep() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        only_decode_step=True,
+        include_decode_bucket_sweep=True,
+        decode_bucket_sweep_values=("1,2,4,8", "1,2,3,4,6,8"),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+    bucket_lines = [
+        line for line in command_lines if "decode-step-dynamic-buckets.jsonl" in line
+    ]
+
+    assert len(entries) == 4
+    assert len(bucket_lines) == 2
+    assert any("--batch-buckets 1,2,4,8" in line for line in bucket_lines)
+    assert any("--batch-buckets 1,2,3,4,6,8" in line for line in bucket_lines)
+
+
+def test_matrix_can_include_decode_tail_sweep() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        only_decode_step=True,
+        include_decode_tail_sweep=True,
+        decode_tail_iterations=300,
+        decode_tail_seeds=(0, 4),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+    tail_lines = [
+        line for line in command_lines if "decode-step-dynamic-tail.jsonl" in line
+    ]
+
+    assert len(entries) == 8
+    assert len(tail_lines) == 6
+    assert all("--mode dynamic-piecewise-graph-same-stream" in line for line in tail_lines)
+    assert any("--batch-buckets 1,2,3,4,6,8" in line for line in tail_lines)
+    assert any("--batch-buckets 1,2,3,4,5,6,8" in line for line in tail_lines)
+    assert any("--batch-buckets 1,2,3,4,5,6,7,8" in line for line in tail_lines)
+    assert all("--iterations 300" in line for line in tail_lines)
+    assert sum("--seed 0" in line for line in tail_lines) == 3
+    assert sum("--seed 4" in line for line in tail_lines) == 3
+
+
+def test_matrix_can_select_decode_dynamic_copy_mode() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        only_decode_step=True,
+        include_decode_tail_sweep=True,
+        decode_tail_bucket_values=("1,2,4,8",),
+        decode_tail_seeds=(0,),
+        decode_attention_backend="sdpa",
+        decode_dynamic_copy_mode="x-only",
+        decode_piecewise_post_mode="eager",
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+    dynamic_lines = [
+        line for line in command_lines if "benchmark-decode-step --dynamic-trace" in line
+    ]
+    static_lines = [
+        line for line in command_lines if "benchmark-decode-step --mode all" in line
+    ]
+
+    assert dynamic_lines
+    assert all("--attention-backend sdpa" in line for line in dynamic_lines)
+    assert all("--dynamic-copy-mode x-only" in line for line in dynamic_lines)
+    assert all("--piecewise-post-mode eager" in line for line in dynamic_lines)
+    assert all("--piecewise-post-mode eager" in line for line in static_lines)
+
+
 def test_dry_run_prints_without_executing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -297,6 +389,30 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="reduction_strategy"):
         benchmark_matrix.build_matrix(reduction_strategy="")
 
+    with pytest.raises(ValueError, match="decode bucket"):
+        benchmark_matrix.build_matrix(decode_bucket_sweep_values=("1,4,2",))
+
+    with pytest.raises(ValueError, match="decode bucket"):
+        benchmark_matrix.build_matrix(decode_tail_bucket_values=("2,1",))
+
+    with pytest.raises(ValueError, match="decode_tail_iterations"):
+        benchmark_matrix.build_matrix(decode_tail_iterations=0)
+
+    with pytest.raises(ValueError, match="decode_tail_seeds"):
+        benchmark_matrix.build_matrix(decode_tail_seeds=())
+
+    with pytest.raises(ValueError, match="decode_tail_seeds"):
+        benchmark_matrix.build_matrix(decode_tail_seeds=(-1,))
+
+    with pytest.raises(ValueError, match="decode_attention_backend"):
+        benchmark_matrix.build_matrix(decode_attention_backend="flash")
+
+    with pytest.raises(ValueError, match="decode_dynamic_copy_mode"):
+        benchmark_matrix.build_matrix(decode_dynamic_copy_mode="kv-only")
+
+    with pytest.raises(ValueError, match="decode_piecewise_post_mode"):
+        benchmark_matrix.build_matrix(decode_piecewise_post_mode="skip")
+
 
 def test_matrix_parses_strategy_sweep_values(
     capsys: pytest.CaptureFixture[str],
@@ -329,6 +445,13 @@ def test_matrix_parses_strategy_sweep_values(
             "--attention-head-dim",
             "64",
             "--include-decode-step",
+            "--include-decode-tail-sweep",
+            "--decode-tail-seeds",
+            "2,3",
+            "--decode-tail-iterations",
+            "300",
+            "--decode-tail-buckets",
+            "1,2,4,8;1,2,3,4,6,8",
         ]
     )
 
@@ -354,3 +477,34 @@ def test_matrix_parses_strategy_sweep_values(
     assert "uv run benchmark-decode-step --mode all" in output
     assert "results/decode-step-dynamic.jsonl" in output
     assert "uv run benchmark-decode-step --dynamic-trace --mode all" in output
+    assert "results/decode-step-dynamic-tail.jsonl" in output
+    assert "--mode dynamic-piecewise-graph-same-stream" in output
+    assert "--batch-buckets 1,2,4,8" in output
+    assert "--batch-buckets 1,2,3,4,6,8" in output
+    assert "--seed 2" in output
+    assert "--seed 3" in output
+
+
+def test_matrix_parses_decode_only_bucket_sweep_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    benchmark_matrix.main(
+        [
+            "--dry-run",
+            "--output-dir",
+            "results",
+            "--include-vector-add-sweep",
+            "--only-decode-step",
+            "--include-decode-bucket-sweep",
+            "--decode-bucket-sweep-values",
+            "1,2,4,8;1,2,3,4,6,8",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "uv run benchmark-memory" not in output
+    assert "results/vector-add-block-size.jsonl" not in output
+    assert "results/decode-step.jsonl" in output
+    assert "results/decode-step-dynamic-buckets.jsonl" in output
+    assert "--batch-buckets 1,2,4,8" in output
+    assert "--batch-buckets 1,2,3,4,6,8" in output

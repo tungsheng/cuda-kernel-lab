@@ -82,6 +82,15 @@ INCLUDE_MATMUL_SWEEP=0
 INCLUDE_RMSNORM_SHAPE_SWEEP=0
 INCLUDE_ATTENTION_BASELINE=0
 INCLUDE_DECODE_STEP=0
+ONLY_DECODE_STEP=0
+INCLUDE_DECODE_BUCKET_SWEEP=0
+INCLUDE_DECODE_TAIL_SWEEP=0
+DECODE_TAIL_BUCKETS=""
+DECODE_TAIL_ITERATIONS=""
+DECODE_TAIL_SEEDS=""
+DECODE_ATTENTION_BACKEND=""
+DECODE_DYNAMIC_COPY_MODE=""
+DECODE_PIECEWISE_POST_MODE=""
 PROFILE=0
 DRY_RUN=0
 
@@ -124,6 +133,27 @@ Options:
   --include-attention-baseline
                             Include the PyTorch contiguous KV-cache decode-attention baseline.
   --include-decode-step     Include synthetic decode-step graph, piecewise graph, and dynamic trace modes.
+  --only-decode-step        Run only synthetic decode-step benchmark modes.
+  --include-decode-bucket-sweep
+                            Include dynamic decode-step batch-bucket sweep traces.
+  --include-decode-tail-sweep
+                            Include longer multi-seed dynamic decode-step tail traces.
+  --decode-tail-buckets <list>
+                            Semicolon-separated tail bucket policies.
+                            Default: benchmark-matrix default.
+  --decode-tail-iterations <n>
+                            Iterations per tail seed. Default: benchmark-matrix default.
+  --decode-tail-seeds <csv>
+                            Comma-separated tail seeds. Default: benchmark-matrix default.
+  --decode-attention-backend <name>
+                            Decode-step attention backend: einsum or sdpa.
+                            Default: benchmark-matrix default.
+  --decode-dynamic-copy-mode <mode>
+                            Dynamic decode-step graph input staging: full or x-only.
+                            Default: benchmark-matrix default.
+  --decode-piecewise-post-mode <mode>
+                            Dynamic decode-step post-attention add mode: graph or eager.
+                            Default: benchmark-matrix default.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
   --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
@@ -137,6 +167,7 @@ Options:
 Examples:
   ./scripts/up
   ./scripts/benchmark --run-id 2026-05-21-a10g-baseline
+  ./scripts/benchmark --run-id 2026-05-21-a10g-decode --only-decode-step
   ./scripts/benchmark --run-id 2026-05-21-a10g-profile --with-profiling
   ./scripts/benchmark --run-id 2026-05-21-a10g-matmul --include-matmul-sweep
   ./scripts/down
@@ -186,6 +217,48 @@ parse_args() {
       --include-decode-step)
         INCLUDE_DECODE_STEP=1
         shift
+        ;;
+      --only-decode-step)
+        ONLY_DECODE_STEP=1
+        shift
+        ;;
+      --include-decode-bucket-sweep)
+        INCLUDE_DECODE_BUCKET_SWEEP=1
+        shift
+        ;;
+      --include-decode-tail-sweep)
+        INCLUDE_DECODE_TAIL_SWEEP=1
+        shift
+        ;;
+      --decode-tail-buckets)
+        require_value "$1" "${2:-}"
+        DECODE_TAIL_BUCKETS=${2:-}
+        shift 2
+        ;;
+      --decode-tail-iterations)
+        require_value "$1" "${2:-}"
+        DECODE_TAIL_ITERATIONS=${2:-}
+        shift 2
+        ;;
+      --decode-tail-seeds)
+        require_value "$1" "${2:-}"
+        DECODE_TAIL_SEEDS=${2:-}
+        shift 2
+        ;;
+      --decode-attention-backend)
+        require_value "$1" "${2:-}"
+        DECODE_ATTENTION_BACKEND=${2:-}
+        shift 2
+        ;;
+      --decode-dynamic-copy-mode)
+        require_value "$1" "${2:-}"
+        DECODE_DYNAMIC_COPY_MODE=${2:-}
+        shift 2
+        ;;
+      --decode-piecewise-post-mode)
+        require_value "$1" "${2:-}"
+        DECODE_PIECEWISE_POST_MODE=${2:-}
+        shift 2
         ;;
       --with-profiling)
         PROFILE=1
@@ -296,6 +369,77 @@ validate_relative_path() {
   }
 }
 
+validate_positive_integer() {
+  local label=$1
+  local value=$2
+
+  [[ "${value}" =~ ^[1-9][0-9]*$ ]] || die "${label} must be a positive integer"
+}
+
+validate_integer_csv() {
+  local label=$1
+  local value=$2
+
+  [[ "${value}" =~ ^[0-9]+(,[0-9]+)*$ ]] || {
+    die "${label} must be a comma-separated list of non-negative integers"
+  }
+}
+
+validate_bucket_policy_list() {
+  local label=$1
+  local value=$2
+
+  [[ "${value}" =~ ^[0-9]+(,[0-9]+)*(;[0-9]+(,[0-9]+)*)*$ ]] || {
+    die "${label} must be semicolon-separated bucket lists like 1,2,4,8;1,2,3,4,6,8"
+  }
+}
+
+validate_decode_attention_backend() {
+  case "$1" in
+    ""|einsum|sdpa)
+      ;;
+    *)
+      die "--decode-attention-backend must be one of: einsum, sdpa"
+      ;;
+  esac
+}
+
+validate_decode_dynamic_copy_mode() {
+  case "$1" in
+    ""|full|x-only)
+      ;;
+    *)
+      die "--decode-dynamic-copy-mode must be one of: full, x-only"
+      ;;
+  esac
+}
+
+validate_decode_piecewise_post_mode() {
+  case "$1" in
+    ""|graph|eager)
+      ;;
+    *)
+      die "--decode-piecewise-post-mode must be one of: graph, eager"
+      ;;
+  esac
+}
+
+validate_decode_tail_options() {
+  if [[ "${INCLUDE_DECODE_TAIL_SWEEP}" == "1" ]]; then
+    if [[ -n "${DECODE_TAIL_BUCKETS}" ]]; then
+      validate_bucket_policy_list "--decode-tail-buckets" "${DECODE_TAIL_BUCKETS}"
+    fi
+    if [[ -n "${DECODE_TAIL_ITERATIONS}" ]]; then
+      validate_positive_integer "--decode-tail-iterations" "${DECODE_TAIL_ITERATIONS}"
+    fi
+    if [[ -n "${DECODE_TAIL_SEEDS}" ]]; then
+      validate_integer_csv "--decode-tail-seeds" "${DECODE_TAIL_SEEDS}"
+    fi
+  elif [[ -n "${DECODE_TAIL_BUCKETS}" || -n "${DECODE_TAIL_ITERATIONS}" || -n "${DECODE_TAIL_SEEDS}" ]]; then
+    die "decode tail options require --include-decode-tail-sweep"
+  fi
+}
+
 resolve_defaults() {
   if [[ -z "${RUN_ID}" ]]; then
     RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
@@ -317,6 +461,10 @@ validate_inputs() {
   validate_relative_path "--report-root" "${REPORT_ROOT}"
   validate_relative_path "profile export directory" "${PROFILE_EXPORT_DIR}"
   validate_relative_path "profile report directory" "${PROFILE_REPORT_DIR}"
+  validate_decode_tail_options
+  validate_decode_attention_backend "${DECODE_ATTENTION_BACKEND}"
+  validate_decode_dynamic_copy_mode "${DECODE_DYNAMIC_COPY_MODE}"
+  validate_decode_piecewise_post_mode "${DECODE_PIECEWISE_POST_MODE}"
 
   if [[ -z "${KEY_FILE}" ]]; then
     die "missing SSH key file; run ./scripts/up first or pass --key-file"
@@ -368,6 +516,10 @@ print_command() {
   printf '\n'
 }
 
+shell_quote() {
+  printf '%q' "$1"
+}
+
 remote_benchmark_command() {
   local command
 
@@ -378,21 +530,49 @@ remote_benchmark_command() {
   fi
   command+=" && export CUDA_KERNEL_LAB_GIT_DIRTY=${GIT_DIRTY}"
   command+=" && uv run benchmark-matrix --output-dir ${RESULT_DIR}"
-  command+=" --include-vector-add-sweep --include-reduction-sweep"
-  if [[ "${INCLUDE_MATMUL}" == "1" ]]; then
-    command+=" --include-matmul"
-  fi
-  if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
-    command+=" --include-matmul-sweep --matmul-input-precision tf32"
-  fi
-  if [[ "${INCLUDE_RMSNORM_SHAPE_SWEEP}" == "1" ]]; then
-    command+=" --include-rmsnorm-shape-sweep"
-  fi
-  if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
-    command+=" --include-attention-baseline"
+  if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
+    command+=" --only-decode-step"
+  else
+    command+=" --include-vector-add-sweep --include-reduction-sweep"
+    if [[ "${INCLUDE_MATMUL}" == "1" ]]; then
+      command+=" --include-matmul"
+    fi
+    if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
+      command+=" --include-matmul-sweep --matmul-input-precision tf32"
+    fi
+    if [[ "${INCLUDE_RMSNORM_SHAPE_SWEEP}" == "1" ]]; then
+      command+=" --include-rmsnorm-shape-sweep"
+    fi
+    if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
+      command+=" --include-attention-baseline"
+    fi
   fi
   if [[ "${INCLUDE_DECODE_STEP}" == "1" ]]; then
     command+=" --include-decode-step"
+  fi
+  if [[ "${INCLUDE_DECODE_BUCKET_SWEEP}" == "1" ]]; then
+    command+=" --include-decode-bucket-sweep"
+  fi
+  if [[ "${INCLUDE_DECODE_TAIL_SWEEP}" == "1" ]]; then
+    command+=" --include-decode-tail-sweep"
+    if [[ -n "${DECODE_TAIL_BUCKETS}" ]]; then
+      command+=" --decode-tail-buckets $(shell_quote "${DECODE_TAIL_BUCKETS}")"
+    fi
+    if [[ -n "${DECODE_TAIL_ITERATIONS}" ]]; then
+      command+=" --decode-tail-iterations ${DECODE_TAIL_ITERATIONS}"
+    fi
+    if [[ -n "${DECODE_TAIL_SEEDS}" ]]; then
+      command+=" --decode-tail-seeds $(shell_quote "${DECODE_TAIL_SEEDS}")"
+    fi
+  fi
+  if [[ -n "${DECODE_ATTENTION_BACKEND}" ]]; then
+    command+=" --decode-attention-backend ${DECODE_ATTENTION_BACKEND}"
+  fi
+  if [[ -n "${DECODE_DYNAMIC_COPY_MODE}" ]]; then
+    command+=" --decode-dynamic-copy-mode ${DECODE_DYNAMIC_COPY_MODE}"
+  fi
+  if [[ -n "${DECODE_PIECEWISE_POST_MODE}" ]]; then
+    command+=" --decode-piecewise-post-mode ${DECODE_PIECEWISE_POST_MODE}"
   fi
   command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
 
@@ -443,6 +623,22 @@ profile_benchmark_command() {
       printf '%s\n' \
         "uv run benchmark-decode-step --mode fused-piecewise-graph --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-fused-piecewise-graph-float16.jsonl"
       ;;
+    decode-step-fused-piecewise-graph-same-stream-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --mode fused-piecewise-graph-same-stream --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-fused-piecewise-graph-same-stream-float16.jsonl"
+      ;;
+    decode-step-dynamic-eager-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --dynamic-trace --mode dynamic-eager --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-dynamic-eager-float16.jsonl"
+      ;;
+    decode-step-dynamic-piecewise-graph-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --dynamic-trace --mode dynamic-piecewise-graph --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-dynamic-piecewise-graph-float16.jsonl"
+      ;;
+    decode-step-dynamic-piecewise-graph-same-stream-float16)
+      printf '%s\n' \
+        "uv run benchmark-decode-step --dynamic-trace --mode dynamic-piecewise-graph-same-stream --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-dynamic-piecewise-graph-same-stream-float16.jsonl"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -483,6 +679,18 @@ profile_title() {
     decode-step-fused-piecewise-graph-float16)
       printf '%s\n' "A10G decode step fused piecewise CUDA Graph float16 profile"
       ;;
+    decode-step-fused-piecewise-graph-same-stream-float16)
+      printf '%s\n' "A10G decode step fused same-stream piecewise CUDA Graph float16 profile"
+      ;;
+    decode-step-dynamic-eager-float16)
+      printf '%s\n' "A10G dynamic decode step eager float16 profile"
+      ;;
+    decode-step-dynamic-piecewise-graph-float16)
+      printf '%s\n' "A10G dynamic decode step piecewise CUDA Graph float16 profile"
+      ;;
+    decode-step-dynamic-piecewise-graph-same-stream-float16)
+      printf '%s\n' "A10G dynamic decode step same-stream piecewise CUDA Graph float16 profile"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -505,7 +713,7 @@ profile_operation() {
     matmul-tiled-float16)
       printf '%s\n' "matmul"
       ;;
-    decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16)
+    decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16|decode-step-fused-piecewise-graph-same-stream-float16|decode-step-dynamic-eager-float16|decode-step-dynamic-piecewise-graph-float16|decode-step-dynamic-piecewise-graph-same-stream-float16)
       printf '%s\n' "decode_step"
       ;;
     *)
@@ -548,6 +756,18 @@ profile_strategy() {
     decode-step-fused-piecewise-graph-float16)
       printf '%s\n' "fused-piecewise-graph"
       ;;
+    decode-step-fused-piecewise-graph-same-stream-float16)
+      printf '%s\n' "fused-piecewise-graph-same-stream"
+      ;;
+    decode-step-dynamic-eager-float16)
+      printf '%s\n' "dynamic-eager"
+      ;;
+    decode-step-dynamic-piecewise-graph-float16)
+      printf '%s\n' "dynamic-piecewise-graph"
+      ;;
+    decode-step-dynamic-piecewise-graph-same-stream-float16)
+      printf '%s\n' "dynamic-piecewise-graph-same-stream"
+      ;;
     *)
       die "unknown profile target: ${target}"
       ;;
@@ -561,7 +781,7 @@ profile_launch_skip() {
     memory-reduction-two-pass-float32)
       printf '%s\n' "10"
       ;;
-    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16)
+    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16|decode-step-fused-piecewise-graph-same-stream-float16|decode-step-dynamic-eager-float16|decode-step-dynamic-piecewise-graph-float16|decode-step-dynamic-piecewise-graph-same-stream-float16)
       printf '%s\n' "5"
       ;;
     *)
@@ -624,20 +844,27 @@ remote_profile_command() {
   command+="; if [ -z \"\${ncu_bin}\" ]; then printf '# Nsight Compute Profile\\n\\nStatus: ncu was not found on the remote host.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
   command+="; if ! sudo -n true >/dev/null 2>&1; then printf '# Nsight Compute Profile\\n\\nStatus: passwordless sudo is required to access NVIDIA performance counters.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
 
-  targets=(
-    memory-vector-add-float32
-    memory-reduction-iterative-float32
-    memory-reduction-two-pass-float32
-    norms-rmsnorm-float16
-    matmul-tiled-float16
-  )
-  if [[ "${INCLUDE_DECODE_STEP}" == "1" ]]; then
+  targets=()
+  if [[ "${ONLY_DECODE_STEP}" != "1" ]]; then
+    targets+=(
+      memory-vector-add-float32
+      memory-reduction-iterative-float32
+      memory-reduction-two-pass-float32
+      norms-rmsnorm-float16
+      matmul-tiled-float16
+    )
+  fi
+  if [[ "${INCLUDE_DECODE_STEP}" == "1" || "${ONLY_DECODE_STEP}" == "1" ]]; then
     targets+=(
       decode-step-naive-eager-float16
       decode-step-fused-eager-float16
       decode-step-naive-graph-float16
       decode-step-fused-graph-float16
       decode-step-fused-piecewise-graph-float16
+      decode-step-fused-piecewise-graph-same-stream-float16
+      decode-step-dynamic-eager-float16
+      decode-step-dynamic-piecewise-graph-float16
+      decode-step-dynamic-piecewise-graph-same-stream-float16
     )
   fi
 
@@ -650,6 +877,13 @@ remote_profile_command() {
 }
 
 print_plan() {
+  local plan_ssh_host
+
+  plan_ssh_host="${SSH_HOST:-<terraform ssh_host>}"
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    plan_ssh_host="<terraform ssh_host>"
+  fi
+
   printf '\nBenchmark plan:\n'
   if [[ "${DRY_RUN}" == "1" ]]; then
     printf '  Mode: dry run; no SSH or Terraform commands will run\n'
@@ -665,7 +899,7 @@ print_plan() {
   if [[ -n "${AWS_PROFILE_NAME}" ]]; then
     printf '  AWS profile: %s\n' "${AWS_PROFILE_NAME}"
   fi
-  printf '  SSH: %s@%s\n' "${SSH_USER}" "${SSH_HOST:-<terraform ssh_host>}"
+  printf '  SSH: %s@%s\n' "${SSH_USER}" "${plan_ssh_host}"
   printf '  SSH key file: %s\n' "${KEY_FILE}"
   printf '  Remote repo: ~/%s\n' "${REMOTE_DIR}"
   printf '  Raw results: %s\n' "${RESULT_DIR}"
@@ -681,8 +915,35 @@ print_plan() {
   if [[ "${INCLUDE_ATTENTION_BASELINE}" == "1" ]]; then
     printf '  Attention baseline: enabled\n'
   fi
+  if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
+    printf '  Decode-only matrix: enabled\n'
+  fi
   if [[ "${INCLUDE_DECODE_STEP}" == "1" ]]; then
     printf '  Decode-step graph benchmark: enabled\n'
+  fi
+  if [[ "${INCLUDE_DECODE_BUCKET_SWEEP}" == "1" ]]; then
+    printf '  Decode-step bucket sweep: enabled\n'
+  fi
+  if [[ "${INCLUDE_DECODE_TAIL_SWEEP}" == "1" ]]; then
+    printf '  Decode-step tail sweep: enabled\n'
+    if [[ -n "${DECODE_TAIL_BUCKETS}" ]]; then
+      printf '  Decode-step tail buckets: %s\n' "${DECODE_TAIL_BUCKETS}"
+    fi
+    if [[ -n "${DECODE_TAIL_ITERATIONS}" ]]; then
+      printf '  Decode-step tail iterations: %s\n' "${DECODE_TAIL_ITERATIONS}"
+    fi
+    if [[ -n "${DECODE_TAIL_SEEDS}" ]]; then
+      printf '  Decode-step tail seeds: %s\n' "${DECODE_TAIL_SEEDS}"
+    fi
+  fi
+  if [[ -n "${DECODE_ATTENTION_BACKEND}" ]]; then
+    printf '  Decode-step attention backend: %s\n' "${DECODE_ATTENTION_BACKEND}"
+  fi
+  if [[ -n "${DECODE_DYNAMIC_COPY_MODE}" ]]; then
+    printf '  Decode-step dynamic copy mode: %s\n' "${DECODE_DYNAMIC_COPY_MODE}"
+  fi
+  if [[ -n "${DECODE_PIECEWISE_POST_MODE}" ]]; then
+    printf '  Decode-step piecewise post mode: %s\n' "${DECODE_PIECEWISE_POST_MODE}"
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"

@@ -16,6 +16,7 @@ from cuda_kernel_lab.benchmarks.decode_step import (
     dynamic_timing_metrics,
     generate_dynamic_trace,
     parse_batch_buckets,
+    representative_trace_steps,
     run_one,
     selected_modes,
     timing_metrics,
@@ -38,6 +39,7 @@ def test_selected_modes_returns_environment_supported_progression() -> None:
         "naive-graph",
         "fused-graph",
         "fused-piecewise-graph",
+        "fused-piecewise-graph-same-stream",
     )
     assert selected_modes(
         "all",
@@ -46,6 +48,7 @@ def test_selected_modes_returns_environment_supported_progression() -> None:
         dynamic_trace=True,
     ) == (
         "dynamic-eager",
+        "dynamic-piecewise-graph-same-stream",
         "dynamic-piecewise-graph",
     )
 
@@ -91,6 +94,10 @@ def test_decode_step_strategy_labels_map_to_optimization_metadata() -> None:
     assert optimization.method_family == "launch replay"
     assert optimization.method_id == "decode_step.fused_piecewise_graph"
 
+    same_stream = technique_from_strategy("dynamic-piecewise-graph-same-stream")
+    assert same_stream is not None
+    assert same_stream.method_id == "decode_step.fused_piecewise_graph_same_stream"
+
 
 def test_dynamic_trace_reports_scheduler_and_padding_metrics() -> None:
     trace = (
@@ -107,6 +114,9 @@ def test_dynamic_trace_reports_scheduler_and_padding_metrics() -> None:
             scheduler_cpu_latencies_ms=[0.01, 0.03],
             graph_hits=2,
             recapture_count=0,
+            region_latencies_ms={
+                "scheduler_decision_host_ms": [0.001, 0.003],
+            },
         ),
         trace=trace,
         batch_buckets=(1, 4),
@@ -118,8 +128,47 @@ def test_dynamic_trace_reports_scheduler_and_padding_metrics() -> None:
     assert metrics["graph_hit_rate_pct"] == 100.0
     assert metrics["padding_waste_pct"] == pytest.approx(20.0)
     assert metrics["batch_occupancy_avg_pct"] == pytest.approx(50.0)
+    assert metrics["host_tail_ratio_p95_p50"] == pytest.approx(1.45)
+    assert metrics["host_step_cpu_p95_us"] == pytest.approx(29.0)
+    assert metrics["scheduler_cpu_p95_us"] == pytest.approx(29.0)
+    assert metrics["scheduler_decision_p95_us"] == pytest.approx(2.9)
+    assert metrics["seq_len_min"] == 2
+    assert metrics["seq_len_p50"] == 3.0
+    assert metrics["seq_len_p95"] == pytest.approx(3.9)
+    assert metrics["seq_len_max"] == 4
     assert metrics["decode_steps"] == 1
     assert metrics["mixed_steps"] == 1
+    phase_breakdown = metrics["phase_breakdown"]
+    assert phase_breakdown["decode"]["steps"] == 1
+    assert phase_breakdown["mixed"]["active_batch_avg"] == 3.0
+    bucket_breakdown = metrics["bucket_breakdown"]
+    assert bucket_breakdown["1"]["steps"] == 1
+    assert bucket_breakdown["4"]["padding_waste_pct"] == pytest.approx(25.0)
+    assert bucket_breakdown["4"]["host_p99_ms"] == 3.0
+
+    eager_metrics = dynamic_timing_metrics(
+        dynamic_loop=DynamicTimedLoop(
+            timings=TimedLoop(
+                host_latencies_ms=[1.0, 3.0],
+                device_latencies_ms=[0.5, 1.0],
+                cpu_latencies_ms=[0.2, 0.4],
+            ),
+            scheduler_cpu_latencies_ms=[0.01, 0.03],
+            graph_hits=0,
+            recapture_count=0,
+            region_latencies_ms={
+                "eager_build_host_ms": [0.01, 0.02],
+                "eager_run_host_ms": [0.9, 2.7],
+            },
+        ),
+        trace=trace,
+        batch_buckets=(1, 4),
+        max_batch_size=4,
+        graph_replay=False,
+    )
+    assert eager_metrics["bucket_breakdown"]["4"]["padding_waste_pct"] == 0.0
+    orchestration = eager_metrics["orchestration_breakdown"]
+    assert orchestration["eager_run_host_ms"]["host_p50_ms"] == pytest.approx(1.8)
 
 
 def test_dynamic_trace_generation_and_bucket_parsing_are_deterministic() -> None:
@@ -137,6 +186,24 @@ def test_dynamic_trace_generation_and_bucket_parsing_are_deterministic() -> None
     assert len(trace) == 3
     assert [step.phase for step in trace] == ["decode", "prefill", "mixed"]
     assert all(1 <= step.active_batch_size <= 4 for step in trace)
+
+
+def test_representative_trace_steps_cover_first_seen_buckets() -> None:
+    trace = (
+        TraceStep(active_batch_size=1, seq_len=2, phase="decode", queue_wait_ms=0.0),
+        TraceStep(active_batch_size=3, seq_len=4, phase="decode", queue_wait_ms=0.0),
+        TraceStep(active_batch_size=2, seq_len=3, phase="mixed", queue_wait_ms=0.0),
+        TraceStep(active_batch_size=5, seq_len=5, phase="prefill", queue_wait_ms=0.0),
+    )
+
+    selected = representative_trace_steps(trace, batch_buckets=(1, 2, 4, 8))
+
+    assert selected == (
+        (0, trace[0]),
+        (2, trace[2]),
+        (1, trace[1]),
+        (3, trace[3]),
+    )
 
 
 def test_dynamic_trace_accounting_averages_variable_steps() -> None:

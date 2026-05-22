@@ -130,8 +130,9 @@ kernel implementation:
    `fused-graph`, `fused-piecewise-graph`
 2. compare host latency, CUDA event latency, synthetic tokens/sec, CPU
    utilization, and launch-overhead estimates
-3. replay the dynamic trace to measure graph hit rate, padding waste, scheduler
-   CPU time, queue wait, and batch occupancy
+3. replay the dynamic trace to measure graph hit rate, padding waste,
+   scheduler decision latency, host step CPU time, queue wait, and batch
+   occupancy
 4. use Nsight Systems when launch ordering or CPU scheduling needs proof
 5. use Nsight Compute on individual fused kernels for occupancy and HBM
    throughput
@@ -145,11 +146,26 @@ uv run benchmark-decode-step --mode all --device cuda --dtype float16
 Recommended live command:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --include-decode-step
+./scripts/benchmark \
+  --run-id <run-id> \
+  --only-decode-step \
+  --include-decode-bucket-sweep \
+  --include-decode-tail-sweep
 ```
+
+The tail sweep compares the default low-padding, middle, and dense bucket
+policies. Pass `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when the next
+optimization question needs a custom policy pair.
+Pass `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
+the current resident-KV-cache dynamic graph path. Add
+`--decode-piecewise-post-mode eager` when the experiment is whether the tiny
+post-attention add should stay outside CUDA Graph replay.
 
 Recommended dynamic trace command:
 
 ```bash
 uv run benchmark-decode-step --dynamic-trace --mode all --device cuda --dtype float16
 ```
+
+Use `dynamic-piecewise-graph-same-stream` as the primary dynamic graph target
+and keep `dynamic-piecewise-graph` as the ordered-stream comparison.

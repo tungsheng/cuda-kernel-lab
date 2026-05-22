@@ -282,11 +282,34 @@ def check_tensors_close(
         if expected_tensor.dtype != actual_tensor.dtype:
             expected_tensor = expected_tensor.to(dtype=actual_tensor.dtype)
 
-        diff = (actual_tensor - expected_tensor).abs()
-        max_abs_error = float(diff.max().item()) if diff.numel() else 0.0
-        denominator = expected_tensor.abs().clamp_min(1e-12)
-        max_rel_error = float((diff / denominator).max().item()) if diff.numel() else 0.0
-        passed = bool(torch.allclose(actual_tensor, expected_tensor, rtol=rtol, atol=atol))
+        actual_finite = torch.isfinite(actual_tensor)
+        expected_finite = torch.isfinite(expected_tensor)
+        finite_mask = actual_finite & expected_finite
+        actual_nonfinite = int((~actual_finite).sum().item())
+        expected_nonfinite = int((~expected_finite).sum().item())
+
+        if finite_mask.any():
+            actual_finite_values = actual_tensor[finite_mask].float()
+            expected_finite_values = expected_tensor[finite_mask].float()
+            diff = (actual_finite_values - expected_finite_values).abs()
+            max_abs_error = float(diff.max().item())
+            denominator = expected_finite_values.abs().clamp_min(1e-12)
+            max_rel_error = float((diff / denominator).max().item())
+        else:
+            max_abs_error = None
+            max_rel_error = None
+
+        passed = (
+            actual_nonfinite == 0
+            and expected_nonfinite == 0
+            and bool(torch.allclose(actual_tensor, expected_tensor, rtol=rtol, atol=atol))
+        )
+        message = None
+        if actual_nonfinite or expected_nonfinite:
+            message = (
+                "non-finite values: "
+                f"actual={actual_nonfinite}, expected={expected_nonfinite}"
+            )
     except Exception as exc:  # pragma: no cover - defensive metadata path
         return CorrectnessResult(
             checked=True,
@@ -305,6 +328,7 @@ def check_tensors_close(
         max_rel_error=max_rel_error,
         atol=atol,
         rtol=rtol,
+        message=message,
     )
 
 

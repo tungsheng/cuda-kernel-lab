@@ -24,7 +24,12 @@ the benchmark script collect focused profiles and compact summaries:
 ```
 
 Add `--include-decode-step` to profile the naive/fused, full-graph, and
-piecewise-graph decode-step modes alongside the standard kernel targets.
+piecewise-graph decode-step modes alongside the standard kernel targets. Use
+`--only-decode-step --with-profiling` when you want only the static and dynamic
+decode-step profile targets. Use `--include-decode-tail-sweep` outside Nsight
+Compute when the question is p95/p99 stability; those rows provide longer
+multi-seed, multi-policy timing evidence while the profiler rows explain
+individual kernels.
 
 Example command shape:
 

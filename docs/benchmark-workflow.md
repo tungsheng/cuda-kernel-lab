@@ -93,6 +93,7 @@ The decode-step benchmark compares the staged workflow:
 - `naive-graph`: decomposed kernels replayed inside one CUDA Graph
 - `fused-graph`: fused kernels replayed inside one CUDA Graph
 - `fused-piecewise-graph`: fused static regions captured around eager attention
+- `fused-piecewise-graph-same-stream`: piecewise replay without an extra graph stream
 
 It reports host latency, CUDA event latency, estimated launch overhead,
 synthetic tokens/sec, process CPU utilization, analytical HBM throughput, and
@@ -107,7 +108,20 @@ uv run benchmark-decode-step --dynamic-trace --mode all --device cuda --dtype fl
 
 The dynamic trace replays variable active batch sizes and sequence lengths into
 batch buckets. It reports graph hit rate, padding waste, synthetic queue wait,
-scheduler CPU time, batch occupancy, and prefill/decode/mixed step counts.
+host step CPU time, scheduler decision latency when graph buckets are used,
+batch occupancy, and prefill/decode/mixed step counts. Each dynamic result also
+includes phase and bucket breakdowns for latency,
+tokens/sec, sequence length, queue wait, padding waste, tail ratios, and
+host-side orchestration timing. The default dynamic graph ordering treats
+same-stream piecewise replay as the primary graph path while retaining ordered
+piecewise replay for A/B comparison.
+
+Use `--attention-backend sdpa` to exercise PyTorch scaled dot-product attention
+inside the decode-step attention region. Use `--dynamic-copy-mode x-only` for
+dynamic piecewise graph replay when the KV cache should be modeled as resident
+and only the graph input activation needs staging. Use
+`--piecewise-post-mode eager` to A/B the tiny post-attention add as an eager
+operation instead of replaying it as a captured graph.
 
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
@@ -140,6 +154,25 @@ uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
 `benchmark-report` reads every `.jsonl` file in the input directory, so write
 small sweeps into the same run directory when they belong to the same evidence
 note.
+
+For focused decode-step work, skip the default memory/softmax/norms/SwiGLU
+matrix and collect only static plus dynamic decode rows:
+
+```bash
+uv run benchmark-matrix \
+  --output-dir experiments/results/aws-ec2/<run-id> \
+  --only-decode-step \
+  --include-decode-bucket-sweep \
+  --include-decode-tail-sweep
+```
+
+The bucket sweep compares the low-padding `1,2,3,4,6,8` policy against denser
+and coarser bucket sets. The tail sweep runs longer same-stream dynamic traces
+across multiple seeds for the default low-padding, middle, and dense policies,
+`1,2,3,4,6,8`, `1,2,3,4,5,6,8`, and `1,2,3,4,5,6,7,8`, and writes to
+`decode-step-dynamic-tail.jsonl`. Override the tail comparison with
+`--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when you want a narrower or
+custom policy set.
 
 For AWS EC2 evidence, start one host, run the benchmark matrix, and tear the
 host down after you finish the experiment batch:
@@ -185,7 +218,10 @@ milestone is about HMMA utilization; use standalone `benchmark-matmul` runs for
 float32 precision experiments. The RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
 The fixed-shape decode-step graph benchmark writes to `decode-step.jsonl`. The
-dynamic trace writes to `decode-step-dynamic.jsonl`.
+dynamic trace writes to `decode-step-dynamic.jsonl`. Dynamic bucket sweeps write
+to `decode-step-dynamic-buckets.jsonl`; multi-seed tail sweeps write to
+`decode-step-dynamic-tail.jsonl`. Reports include tail rows, worst dynamic
+buckets, and host orchestration regions when those nested metrics are present.
 
 ## Save Results
 

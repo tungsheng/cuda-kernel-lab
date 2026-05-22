@@ -286,6 +286,20 @@ def decode_step_optimization(
                 "between them, plus lower CPU launch overhead than fully eager dynamic replay."
             ),
         )
+    if kernel_strategy == "fused" and launch_strategy == "piecewise_graph_same_stream":
+        return OptimizationTechnique(
+            method_family="launch replay",
+            method_id="decode_step.fused_piecewise_graph_same_stream",
+            technique="Fused same-stream piecewise CUDA Graph replay",
+            hypothesis=(
+                "Replaying captured fused pre/post-attention regions on the caller stream should "
+                "preserve dynamic-shape graph reuse while removing explicit stream handoff cost."
+            ),
+            expected_profiler_signal=(
+                "Similar fused RMSNorm/SwiGLU kernels to ordered piecewise replay, with lower "
+                "host/device gap if stream synchronization overhead was material."
+            ),
+        )
 
     return OptimizationTechnique(
         method_family="custom",
@@ -385,13 +399,20 @@ def technique_from_strategy(strategy: str | None) -> OptimizationTechnique | Non
         "naive-graph",
         "fused-graph",
         "fused-piecewise-graph",
+        "fused-piecewise-graph-same-stream",
         "dynamic-eager",
         "dynamic-piecewise-graph",
+        "dynamic-piecewise-graph-same-stream",
     }:
         if strategy == "fused-piecewise-graph":
             return decode_step_optimization(
                 kernel_strategy="fused",
                 launch_strategy="piecewise_graph",
+            )
+        if strategy == "fused-piecewise-graph-same-stream":
+            return decode_step_optimization(
+                kernel_strategy="fused",
+                launch_strategy="piecewise_graph_same_stream",
             )
         if strategy == "dynamic-eager":
             return decode_step_optimization(
@@ -402,6 +423,11 @@ def technique_from_strategy(strategy: str | None) -> OptimizationTechnique | Non
             return decode_step_optimization(
                 kernel_strategy="fused",
                 launch_strategy="piecewise_graph",
+            )
+        if strategy == "dynamic-piecewise-graph-same-stream":
+            return decode_step_optimization(
+                kernel_strategy="fused",
+                launch_strategy="piecewise_graph_same_stream",
             )
         kernel_strategy, launch_strategy = strategy.split("-", maxsplit=1)
         return decode_step_optimization(

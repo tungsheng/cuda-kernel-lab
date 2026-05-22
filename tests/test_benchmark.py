@@ -2,8 +2,22 @@ from __future__ import annotations
 
 import argparse
 
-from cuda_kernel_lab.benchmark import BenchmarkResult, CorrectnessResult, collect_run_metadata
+import pytest
+
+try:
+    import torch
+except ImportError:
+    torch = None
+
+from cuda_kernel_lab.benchmark import (
+    BenchmarkResult,
+    CorrectnessResult,
+    check_tensors_close,
+    collect_run_metadata,
+)
 from cuda_kernel_lab.optimization import memory_optimization
+
+requires_torch = pytest.mark.skipif(torch is None, reason="torch is not installed")
 
 
 def test_benchmark_result_includes_strategy_optimization_and_correctness_metadata() -> None:
@@ -56,3 +70,19 @@ def test_run_metadata_can_use_exported_git_context(monkeypatch) -> None:
 
     assert metadata.git_commit == "abc123"
     assert metadata.git_dirty is False
+
+
+@requires_torch
+def test_check_tensors_close_reports_nonfinite_values_without_nan_errors() -> None:
+    result = check_tensors_close(
+        torch.tensor([1.0, float("nan")]),
+        torch.tensor([1.0, 2.0]),
+        torch=torch,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+    assert result.passed is False
+    assert result.max_abs_error == 0.0
+    assert result.max_rel_error == 0.0
+    assert result.message == "non-finite values: actual=1, expected=0"

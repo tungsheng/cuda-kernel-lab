@@ -47,6 +47,26 @@ DEFAULT_ATTENTION_SEQ_LEN = 2048
 DEFAULT_ATTENTION_NUM_HEADS = 16
 DEFAULT_ATTENTION_HEAD_DIM = 128
 DEFAULT_ATTENTION_DTYPE = "float16"
+DEFAULT_DECODE_BUCKET_SWEEP_VALUES = (
+    "1,2,3,4,6,8",
+    "1,2,3,4,5,6,8",
+    "1,2,3,4,5,6,7,8",
+    "1,2,4,6,8",
+    "1,2,4,8",
+)
+DEFAULT_DECODE_TAIL_BUCKET_VALUES = (
+    "1,2,3,4,6,8",
+    "1,2,3,4,5,6,8",
+    "1,2,3,4,5,6,7,8",
+)
+DEFAULT_DECODE_TAIL_ITERATIONS = 500
+DEFAULT_DECODE_TAIL_SEEDS = (0, 1, 2)
+DEFAULT_DECODE_ATTENTION_BACKEND = "einsum"
+DECODE_ATTENTION_BACKENDS = ("einsum", "sdpa")
+DEFAULT_DECODE_DYNAMIC_COPY_MODE = "full"
+DECODE_DYNAMIC_COPY_MODES = ("full", "x-only")
+DEFAULT_DECODE_PIECEWISE_POST_MODE = "graph"
+DECODE_PIECEWISE_POST_MODES = ("graph", "eager")
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
 DEFAULT_REDUCTION_STRATEGY = "iterative"
 DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
@@ -95,6 +115,17 @@ def build_matrix(
     attention_head_dim: int = DEFAULT_ATTENTION_HEAD_DIM,
     attention_dtype: str = DEFAULT_ATTENTION_DTYPE,
     include_decode_step: bool = False,
+    only_decode_step: bool = False,
+    include_decode_bucket_sweep: bool = False,
+    decode_bucket_sweep_values: tuple[str, ...] = DEFAULT_DECODE_BUCKET_SWEEP_VALUES,
+    include_decode_tail_sweep: bool = False,
+    decode_tail_buckets: str | None = None,
+    decode_tail_bucket_values: tuple[str, ...] | None = None,
+    decode_tail_iterations: int = DEFAULT_DECODE_TAIL_ITERATIONS,
+    decode_tail_seeds: tuple[int, ...] = DEFAULT_DECODE_TAIL_SEEDS,
+    decode_attention_backend: str = DEFAULT_DECODE_ATTENTION_BACKEND,
+    decode_dynamic_copy_mode: str = DEFAULT_DECODE_DYNAMIC_COPY_MODE,
+    decode_piecewise_post_mode: str = DEFAULT_DECODE_PIECEWISE_POST_MODE,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -135,6 +166,29 @@ def build_matrix(
         raise ValueError("attention shape values must be positive")
     if attention_dtype not in DTYPES:
         raise ValueError("attention_dtype must be one of float32, float16")
+    if decode_tail_bucket_values is None:
+        decode_tail_bucket_values = (
+            _parse_decode_bucket_values(decode_tail_buckets)
+            if decode_tail_buckets is not None
+            else DEFAULT_DECODE_TAIL_BUCKET_VALUES
+        )
+
+    for buckets in decode_bucket_sweep_values:
+        _validate_batch_bucket_value(buckets)
+    for buckets in decode_tail_bucket_values:
+        _validate_batch_bucket_value(buckets)
+    if decode_tail_iterations <= 0:
+        raise ValueError("decode_tail_iterations must be positive")
+    if not decode_tail_seeds:
+        raise ValueError("decode_tail_seeds must include at least one seed")
+    if any(seed < 0 for seed in decode_tail_seeds):
+        raise ValueError("decode_tail_seeds must be non-negative")
+    if decode_attention_backend not in DECODE_ATTENTION_BACKENDS:
+        raise ValueError("decode_attention_backend must be one of einsum, sdpa")
+    if decode_dynamic_copy_mode not in DECODE_DYNAMIC_COPY_MODES:
+        raise ValueError("decode_dynamic_copy_mode must be one of full, x-only")
+    if decode_piecewise_post_mode not in DECODE_PIECEWISE_POST_MODES:
+        raise ValueError("decode_piecewise_post_mode must be one of graph, eager")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
     if reduction_strategy not in REDUCTION_STRATEGIES:
@@ -151,145 +205,146 @@ def build_matrix(
         matmul_num_stages,
         matmul_input_precision,
     )
-    for dtype in DTYPES:
-        commands.append(
-            MatrixCommand(
-                primitive="memory",
-                dtype=dtype,
-                command=(
-                    "uv",
-                    "run",
-                    "benchmark-memory",
-                    "--backend",
-                    "all",
-                    "--device",
-                    device,
-                    "--op",
-                    "all",
-                    "--numel",
-                    "16777216",
-                    "--dtype",
-                    dtype,
-                    "--block-size",
-                    str(memory_block_size),
-                    "--reduction-strategy",
-                    reduction_strategy,
-                    "--warmup",
-                    str(warmup),
-                    "--iterations",
-                    str(iterations),
-                    "--output",
-                    str(output_dir / "memory.jsonl"),
-                ),
-            )
-        )
-        commands.append(
-            MatrixCommand(
-                primitive="softmax",
-                dtype=dtype,
-                command=(
-                    "uv",
-                    "run",
-                    "benchmark-softmax",
-                    "--backend",
-                    "all",
-                    "--device",
-                    device,
-                    "--rows",
-                    "4096",
-                    "--cols",
-                    "1024",
-                    "--dtype",
-                    dtype,
-                    "--warmup",
-                    str(warmup),
-                    "--iterations",
-                    str(iterations),
-                    "--output",
-                    str(output_dir / "softmax.jsonl"),
-                ),
-            )
-        )
-        commands.append(
-            MatrixCommand(
-                primitive="norms",
-                dtype=dtype,
-                command=(
-                    "uv",
-                    "run",
-                    "benchmark-norms",
-                    "--backend",
-                    "all",
-                    "--device",
-                    device,
-                    "--op",
-                    "all",
-                    "--rows",
-                    "4096",
-                    "--cols",
-                    "4096",
-                    "--dtype",
-                    dtype,
-                    "--warmup",
-                    str(warmup),
-                    "--iterations",
-                    str(iterations),
-                    "--output",
-                    str(output_dir / "norms.jsonl"),
-                ),
-            )
-        )
-        commands.append(
-            MatrixCommand(
-                primitive="swiglu",
-                dtype=dtype,
-                command=(
-                    "uv",
-                    "run",
-                    "benchmark-swiglu",
-                    "--backend",
-                    "all",
-                    "--device",
-                    device,
-                    "--rows",
-                    "4096",
-                    "--cols",
-                    "4096",
-                    "--dtype",
-                    dtype,
-                    "--block-size",
-                    str(swiglu_block_size),
-                    "--warmup",
-                    str(warmup),
-                    "--iterations",
-                    str(iterations),
-                    "--output",
-                    str(output_dir / "swiglu.jsonl"),
-                ),
-            )
-        )
-        if include_matmul or (include_matmul_sweep and dtype == "float16"):
+    if not only_decode_step:
+        for dtype in DTYPES:
             commands.append(
                 MatrixCommand(
-                    primitive="matmul",
+                    primitive="memory",
                     dtype=dtype,
-                    command=_matmul_command(
-                        device=device,
-                        dtype=dtype,
-                        block_m=matmul_block_m,
-                        block_n=matmul_block_n,
-                        block_k=matmul_block_k,
-                        num_warps=matmul_num_warps,
-                        num_stages=matmul_num_stages,
-                        input_precision=matmul_input_precision,
-                        warmup=warmup,
-                        iterations=iterations,
-                        output=output_dir / "matmul.jsonl",
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-memory",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--op",
+                        "all",
+                        "--numel",
+                        "16777216",
+                        "--dtype",
+                        dtype,
+                        "--block-size",
+                        str(memory_block_size),
+                        "--reduction-strategy",
+                        reduction_strategy,
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "memory.jsonl"),
                     ),
                 )
             )
+            commands.append(
+                MatrixCommand(
+                    primitive="softmax",
+                    dtype=dtype,
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-softmax",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--rows",
+                        "4096",
+                        "--cols",
+                        "1024",
+                        "--dtype",
+                        dtype,
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "softmax.jsonl"),
+                    ),
+                )
+            )
+            commands.append(
+                MatrixCommand(
+                    primitive="norms",
+                    dtype=dtype,
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-norms",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--op",
+                        "all",
+                        "--rows",
+                        "4096",
+                        "--cols",
+                        "4096",
+                        "--dtype",
+                        dtype,
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "norms.jsonl"),
+                    ),
+                )
+            )
+            commands.append(
+                MatrixCommand(
+                    primitive="swiglu",
+                    dtype=dtype,
+                    command=(
+                        "uv",
+                        "run",
+                        "benchmark-swiglu",
+                        "--backend",
+                        "all",
+                        "--device",
+                        device,
+                        "--rows",
+                        "4096",
+                        "--cols",
+                        "4096",
+                        "--dtype",
+                        dtype,
+                        "--block-size",
+                        str(swiglu_block_size),
+                        "--warmup",
+                        str(warmup),
+                        "--iterations",
+                        str(iterations),
+                        "--output",
+                        str(output_dir / "swiglu.jsonl"),
+                    ),
+                )
+            )
+            if include_matmul or (include_matmul_sweep and dtype == "float16"):
+                commands.append(
+                    MatrixCommand(
+                        primitive="matmul",
+                        dtype=dtype,
+                        command=_matmul_command(
+                            device=device,
+                            dtype=dtype,
+                            block_m=matmul_block_m,
+                            block_n=matmul_block_n,
+                            block_k=matmul_block_k,
+                            num_warps=matmul_num_warps,
+                            num_stages=matmul_num_stages,
+                            input_precision=matmul_input_precision,
+                            warmup=warmup,
+                            iterations=iterations,
+                            output=output_dir / "matmul.jsonl",
+                        ),
+                    )
+                )
 
-    if include_vector_add_sweep:
+    if include_vector_add_sweep and not only_decode_step:
         for block_size in _extra_vector_add_block_sizes(
             vector_add_sweep_block_sizes,
             baseline_block_size=memory_block_size,
@@ -326,7 +381,7 @@ def build_matrix(
                 )
             )
 
-    if include_reduction_sweep:
+    if include_reduction_sweep and not only_decode_step:
         for strategy in _extra_values(
             reduction_sweep_strategies,
             baseline_value=reduction_strategy,
@@ -363,7 +418,7 @@ def build_matrix(
                 )
             )
 
-    if include_matmul_sweep:
+    if include_matmul_sweep and not only_decode_step:
         for (
             block_m,
             block_n,
@@ -396,7 +451,7 @@ def build_matrix(
                     ),
                 )
             )
-    if include_rmsnorm_shape_sweep:
+    if include_rmsnorm_shape_sweep and not only_decode_step:
         for rows, cols in rmsnorm_shape_sweep_shapes:
             commands.append(
                 MatrixCommand(
@@ -427,7 +482,7 @@ def build_matrix(
                     ),
                 )
             )
-    if include_attention_baseline:
+    if include_attention_baseline and not only_decode_step:
         commands.append(
             MatrixCommand(
                 primitive="attention",
@@ -457,54 +512,49 @@ def build_matrix(
                 ),
             )
         )
-    if include_decode_step:
-        commands.append(
-            MatrixCommand(
-                primitive="decode_step",
-                dtype="float16",
-                command=(
-                    "uv",
-                    "run",
-                    "benchmark-decode-step",
-                    "--mode",
-                    "all",
-                    "--device",
-                    device,
-                    "--dtype",
-                    "float16",
-                    "--warmup",
-                    str(warmup),
-                    "--iterations",
-                    str(iterations),
-                    "--output",
-                    str(output_dir / "decode-step.jsonl"),
-                ),
+    if include_decode_step or only_decode_step:
+        commands.extend(
+            _decode_step_commands(
+                device=device,
+                output_dir=output_dir,
+                warmup=warmup,
+                iterations=iterations,
+                attention_backend=decode_attention_backend,
+                dynamic_copy_mode=decode_dynamic_copy_mode,
+                piecewise_post_mode=decode_piecewise_post_mode,
             )
         )
-        commands.append(
-            MatrixCommand(
-                primitive="decode_step",
-                dtype="float16",
-                command=(
-                    "uv",
-                    "run",
-                    "benchmark-decode-step",
-                    "--dynamic-trace",
-                    "--mode",
-                    "all",
-                    "--device",
-                    device,
-                    "--dtype",
-                    "float16",
-                    "--warmup",
-                    str(warmup),
-                    "--iterations",
-                    str(iterations),
-                    "--output",
-                    str(output_dir / "decode-step-dynamic.jsonl"),
-                ),
+    if include_decode_bucket_sweep:
+        for batch_buckets in decode_bucket_sweep_values:
+            commands.append(
+                _decode_step_dynamic_command(
+                    device=device,
+                    warmup=warmup,
+                    iterations=iterations,
+                    output=output_dir / "decode-step-dynamic-buckets.jsonl",
+                    batch_buckets=batch_buckets,
+                    attention_backend=decode_attention_backend,
+                    dynamic_copy_mode=decode_dynamic_copy_mode,
+                    piecewise_post_mode=decode_piecewise_post_mode,
+                )
             )
-        )
+    if include_decode_tail_sweep:
+        for batch_buckets in decode_tail_bucket_values:
+            for seed in decode_tail_seeds:
+                commands.append(
+                    _decode_step_dynamic_command(
+                        device=device,
+                        warmup=warmup,
+                        iterations=decode_tail_iterations,
+                        output=output_dir / "decode-step-dynamic-tail.jsonl",
+                        mode="dynamic-piecewise-graph-same-stream",
+                        batch_buckets=batch_buckets,
+                        seed=seed,
+                        attention_backend=decode_attention_backend,
+                        dynamic_copy_mode=decode_dynamic_copy_mode,
+                        piecewise_post_mode=decode_piecewise_post_mode,
+                    )
+                )
     return tuple(commands)
 
 
@@ -608,6 +658,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Add synthetic decode-step graph, piecewise graph, and dynamic trace benchmarks.",
     )
     parser.add_argument(
+        "--only-decode-step",
+        action="store_true",
+        help="Run only synthetic decode-step static and dynamic trace benchmarks.",
+    )
+    parser.add_argument(
+        "--include-decode-bucket-sweep",
+        action="store_true",
+        help="Add dynamic decode-step traces for alternate batch-bucket sets.",
+    )
+    parser.add_argument(
+        "--decode-bucket-sweep-values",
+        default=_join_decode_bucket_values(DEFAULT_DECODE_BUCKET_SWEEP_VALUES),
+        help=(
+            "Semicolon-separated batch-bucket lists for --include-decode-bucket-sweep, "
+            "for example '1,2,4,8;1,2,3,4,6,8'."
+        ),
+    )
+    parser.add_argument(
+        "--include-decode-tail-sweep",
+        action="store_true",
+        help="Add longer multi-seed dynamic decode traces for tail-latency evidence.",
+    )
+    parser.add_argument(
+        "--decode-tail-buckets",
+        default=_join_decode_bucket_values(DEFAULT_DECODE_TAIL_BUCKET_VALUES),
+        help=(
+            "Semicolon-separated batch-bucket lists for --include-decode-tail-sweep, "
+            "for example '1,2,3,4,6,8;1,2,3,4,5,6,7,8'."
+        ),
+    )
+    parser.add_argument(
+        "--decode-tail-iterations",
+        type=int,
+        default=DEFAULT_DECODE_TAIL_ITERATIONS,
+        help="Iterations per seed for --include-decode-tail-sweep.",
+    )
+    parser.add_argument(
+        "--decode-tail-seeds",
+        default=_join_int_values(DEFAULT_DECODE_TAIL_SEEDS),
+        help="Comma-separated seeds for --include-decode-tail-sweep.",
+    )
+    parser.add_argument(
+        "--decode-attention-backend",
+        choices=DECODE_ATTENTION_BACKENDS,
+        default=DEFAULT_DECODE_ATTENTION_BACKEND,
+        help="Attention backend passed to decode-step benchmark commands.",
+    )
+    parser.add_argument(
+        "--decode-dynamic-copy-mode",
+        choices=DECODE_DYNAMIC_COPY_MODES,
+        default=DEFAULT_DECODE_DYNAMIC_COPY_MODE,
+        help="Dynamic piecewise decode-step input staging mode.",
+    )
+    parser.add_argument(
+        "--decode-piecewise-post-mode",
+        choices=DECODE_PIECEWISE_POST_MODES,
+        default=DEFAULT_DECODE_PIECEWISE_POST_MODE,
+        help="Post-attention add mode for dynamic piecewise decode-step replay.",
+    )
+    parser.add_argument(
         "--reduction-strategy",
         choices=REDUCTION_STRATEGIES,
         default=DEFAULT_REDUCTION_STRATEGY,
@@ -664,6 +774,18 @@ def main(argv: list[str] | None = None) -> None:
         attention_head_dim=args.attention_head_dim,
         attention_dtype=args.attention_dtype,
         include_decode_step=args.include_decode_step,
+        only_decode_step=args.only_decode_step,
+        include_decode_bucket_sweep=args.include_decode_bucket_sweep,
+        decode_bucket_sweep_values=_parse_decode_bucket_values(
+            args.decode_bucket_sweep_values
+        ),
+        include_decode_tail_sweep=args.include_decode_tail_sweep,
+        decode_tail_bucket_values=_parse_decode_bucket_values(args.decode_tail_buckets),
+        decode_tail_iterations=args.decode_tail_iterations,
+        decode_tail_seeds=_parse_int_values(args.decode_tail_seeds, label="decode_tail_seeds"),
+        decode_attention_backend=args.decode_attention_backend,
+        decode_dynamic_copy_mode=args.decode_dynamic_copy_mode,
+        decode_piecewise_post_mode=args.decode_piecewise_post_mode,
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,
@@ -729,6 +851,130 @@ def _matmul_command(
         str(iterations),
         "--output",
         str(output),
+    )
+
+
+def _decode_step_commands(
+    *,
+    device: str,
+    output_dir: Path,
+    warmup: int,
+    iterations: int,
+    attention_backend: str,
+    dynamic_copy_mode: str,
+    piecewise_post_mode: str,
+) -> tuple[MatrixCommand, ...]:
+    return (
+        _decode_step_static_command(
+            device=device,
+            warmup=warmup,
+            iterations=iterations,
+            output=output_dir / "decode-step.jsonl",
+            attention_backend=attention_backend,
+            piecewise_post_mode=piecewise_post_mode,
+        ),
+        _decode_step_dynamic_command(
+            device=device,
+            warmup=warmup,
+            iterations=iterations,
+            output=output_dir / "decode-step-dynamic.jsonl",
+            attention_backend=attention_backend,
+            dynamic_copy_mode=dynamic_copy_mode,
+            piecewise_post_mode=piecewise_post_mode,
+        ),
+    )
+
+
+def _decode_step_static_command(
+    *,
+    device: str,
+    warmup: int,
+    iterations: int,
+    output: Path,
+    attention_backend: str,
+    piecewise_post_mode: str,
+) -> MatrixCommand:
+    command = [
+        "uv",
+        "run",
+        "benchmark-decode-step",
+        "--mode",
+        "all",
+        "--device",
+        device,
+        "--dtype",
+        "float16",
+    ]
+    if attention_backend != DEFAULT_DECODE_ATTENTION_BACKEND:
+        command.extend(("--attention-backend", attention_backend))
+    if piecewise_post_mode != DEFAULT_DECODE_PIECEWISE_POST_MODE:
+        command.extend(("--piecewise-post-mode", piecewise_post_mode))
+    command.extend(
+        (
+            "--warmup",
+            str(warmup),
+            "--iterations",
+            str(iterations),
+            "--output",
+            str(output),
+        )
+    )
+    return MatrixCommand(
+        primitive="decode_step",
+        dtype="float16",
+        command=tuple(command),
+    )
+
+
+def _decode_step_dynamic_command(
+    *,
+    device: str,
+    warmup: int,
+    iterations: int,
+    output: Path,
+    mode: str = "all",
+    batch_buckets: str | None = None,
+    seed: int | None = None,
+    attention_backend: str = DEFAULT_DECODE_ATTENTION_BACKEND,
+    dynamic_copy_mode: str = DEFAULT_DECODE_DYNAMIC_COPY_MODE,
+    piecewise_post_mode: str = DEFAULT_DECODE_PIECEWISE_POST_MODE,
+) -> MatrixCommand:
+    command = [
+        "uv",
+        "run",
+        "benchmark-decode-step",
+        "--dynamic-trace",
+        "--mode",
+        mode,
+        "--device",
+        device,
+        "--dtype",
+        "float16",
+    ]
+    if attention_backend != DEFAULT_DECODE_ATTENTION_BACKEND:
+        command.extend(("--attention-backend", attention_backend))
+    if dynamic_copy_mode != DEFAULT_DECODE_DYNAMIC_COPY_MODE:
+        command.extend(("--dynamic-copy-mode", dynamic_copy_mode))
+    if piecewise_post_mode != DEFAULT_DECODE_PIECEWISE_POST_MODE:
+        command.extend(("--piecewise-post-mode", piecewise_post_mode))
+    if batch_buckets is not None:
+        command.extend(("--batch-buckets", batch_buckets))
+    if seed is not None:
+        command.extend(("--seed", str(seed)))
+    command.extend(
+        (
+            "--warmup",
+            str(warmup),
+            "--iterations",
+            str(iterations),
+            "--output",
+            str(output),
+        )
+    )
+    return MatrixCommand(
+        primitive="decode_step",
+        dtype="float16",
+        command=tuple(command),
     )
 
 
@@ -840,6 +1086,38 @@ def _parse_values(value: str) -> tuple[str, ...]:
     return values
 
 
+def _parse_int_values(value: str, *, label: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(part.strip()) for part in value.split(",") if part.strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} must be comma-separated integers") from exc
+    if not values:
+        raise ValueError(f"{label} must not be empty")
+    return values
+
+
+def _parse_decode_bucket_values(value: str) -> tuple[str, ...]:
+    values = tuple(part.strip() for part in value.split(";") if part.strip())
+    if not values:
+        raise ValueError("decode_bucket_sweep_values must not be empty")
+    for buckets in values:
+        _validate_batch_bucket_value(buckets)
+    return values
+
+
+def _validate_batch_bucket_value(value: str) -> None:
+    try:
+        buckets = tuple(int(part.strip()) for part in value.split(",") if part.strip())
+    except ValueError as exc:
+        raise ValueError("decode bucket values must be comma-separated integers") from exc
+    if not buckets:
+        raise ValueError("decode bucket values must not be empty")
+    if any(bucket <= 0 for bucket in buckets):
+        raise ValueError("decode bucket values must be positive")
+    if tuple(sorted(set(buckets))) != buckets:
+        raise ValueError("decode bucket values must be unique and ascending")
+
+
 def _extra_values(values: tuple[str, ...], *, baseline_value: str) -> tuple[str, ...]:
     seen = {baseline_value}
     extras = []
@@ -869,6 +1147,14 @@ def _join_shapes(shapes: tuple[tuple[int, int], ...]) -> str:
 
 def _join_values(values: tuple[str, ...]) -> str:
     return ",".join(values)
+
+
+def _join_int_values(values: tuple[int, ...]) -> str:
+    return ",".join(str(value) for value in values)
+
+
+def _join_decode_bucket_values(values: tuple[str, ...]) -> str:
+    return ";".join(values)
 
 
 if __name__ == "__main__":

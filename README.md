@@ -49,6 +49,46 @@ SSH key under `.aws-gpu/keys/`.
 ./scripts/down
 ```
 
+Run the decode-step graph and dynamic batching workflow without the full matrix.
+Add the tail sweep when you need multi-seed p95/p99 evidence for the current
+same-stream piecewise graph path. By default it compares the low-padding
+`1,2,3,4,6,8`, middle `1,2,3,4,5,6,8`, and dense
+`1,2,3,4,5,6,7,8` policies:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --only-decode-step \
+  --include-decode-bucket-sweep \
+  --include-decode-tail-sweep
+```
+
+Override the tail policy set with a semicolon-separated list when an experiment
+needs a narrower comparison:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --only-decode-step \
+  --include-decode-tail-sweep \
+  --decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'
+```
+
+Use the SDPA attention backend and resident-cache-style graph input staging for
+the current dynamic piecewise graph path. Add the eager post-attention mode when
+you want to A/B the tiny post-add graph replay against a direct eager add:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --only-decode-step \
+  --include-decode-tail-sweep \
+  --decode-attention-backend sdpa \
+  --decode-dynamic-copy-mode x-only \
+  --decode-piecewise-post-mode eager \
+  --decode-tail-buckets '1,2,3,4,5,6,7,8'
+```
+
 Add focused Nsight Compute profiler captures to a benchmark run:
 
 ```bash

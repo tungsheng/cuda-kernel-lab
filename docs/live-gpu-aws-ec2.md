@@ -50,6 +50,16 @@ Run more benchmark experiments without another Terraform apply/destroy cycle:
 ./scripts/benchmark --run-id <second-run-id> --include-matmul-sweep
 ```
 
+For decode-step graph and dynamic batching iterations, skip the full matrix:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --only-decode-step \
+  --include-decode-bucket-sweep \
+  --include-decode-tail-sweep
+```
+
 Capture the current recommended evidence bundle before moving from matmul into
 attention work:
 
@@ -72,6 +82,9 @@ Tear the host down:
 ```bash
 ./scripts/down
 ```
+
+The default teardown removes generated Terraform variables and generated
+connection metadata, so the next `./scripts/up` starts with fresh host outputs.
 
 If SSH times out on a network where HTTPS and SSH use different carrier NAT
 egress addresses, override the auto-discovered `/32` with the SSH-visible CIDR:
@@ -172,12 +185,22 @@ The matmul target uses the current Tensor Core candidate launch settings from
 the benchmark CLI and should be read alongside the `--include-matmul-sweep`
 rows before promoting a final tile choice.
 
-When `--include-decode-step` is also set, profiling adds the fixed-shape
-synthetic decode-step modes: naive eager, fused eager, naive CUDA Graph, fused
-CUDA Graph, and fused piecewise CUDA Graph. Use those Nsight summaries for the
-occupancy and HBM-counter side of the graph replay comparison. The matrix also
-writes a dynamic trace to `decode-step-dynamic.jsonl` for scheduler metrics such
-as graph hit rate and padding waste.
+When `--include-decode-step` or `--only-decode-step` is set, profiling adds the
+fixed-shape synthetic decode-step modes plus dynamic eager, ordered piecewise
+graph, and same-stream piecewise graph targets. Use those Nsight summaries for
+the occupancy and HBM-counter side of the graph replay comparison. The matrix
+also writes a dynamic trace to `decode-step-dynamic.jsonl` for scheduler metrics
+such as graph hit rate, padding waste, scheduler decision latency,
+phase/bucket latency breakdowns, and host-side orchestration timing. Add
+`--include-decode-tail-sweep` when p95/p99 stability is the experiment
+question; it runs longer same-stream dynamic traces across multiple seeds for
+the default low-padding, middle, and dense bucket policies.
+Use `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` to compare a custom policy
+set without editing the matrix code.
+Use `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
+the current resident-KV-cache dynamic piecewise graph experiment, and add
+`--decode-piecewise-post-mode eager` when testing whether the post-attention add
+is better left outside the captured graph.
 
 The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

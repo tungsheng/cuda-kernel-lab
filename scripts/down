@@ -63,10 +63,17 @@ absolute_path() {
 
 TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
 TF_VARS_FILE=$(absolute_path "${CUDA_KERNEL_LAB_TF_VARS_FILE:-${TF_DIR}/local.auto.tfvars}")
+STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}")
+CONNECTION_FILE=$(absolute_path "${CUDA_KERNEL_LAB_CONNECTION_FILE:-${STATE_DIR}/connection.env}")
 if [[ -n "${CUDA_KERNEL_LAB_TF_VARS_FILE:-}" ]]; then
   TF_VARS_FILE_EXPLICIT=1
 else
   TF_VARS_FILE_EXPLICIT=0
+fi
+if [[ -n "${CUDA_KERNEL_LAB_CONNECTION_FILE:-}" ]]; then
+  CONNECTION_FILE_EXPLICIT=1
+else
+  CONNECTION_FILE_EXPLICIT=0
 fi
 
 REQUESTED_REGION=""
@@ -152,6 +159,7 @@ print_destroy_summary() {
   printf '  Terraform: %s\n' "${TF_DIR}"
   printf '  Variables: %s\n' "${TF_VARS_FILE}"
   printf '  Local tfvars: %s\n' "$(tfvars_cleanup_label)"
+  printf '  Connection metadata: %s\n' "$(connection_cleanup_label)"
 }
 
 tfvars_cleanup_label() {
@@ -172,6 +180,14 @@ tfvars_cleanup_label() {
   esac
 }
 
+connection_cleanup_label() {
+  if [[ "${CONNECTION_FILE_EXPLICIT}" == "1" ]]; then
+    printf 'keep explicit path after destroy'
+  else
+    printf 'remove generated default after destroy'
+  fi
+}
+
 should_remove_tfvars() {
   [[ -f "${TF_VARS_FILE}" ]] || return 1
 
@@ -186,6 +202,11 @@ should_remove_tfvars() {
       [[ "${TF_VARS_FILE_EXPLICIT}" == "0" ]]
       ;;
   esac
+}
+
+should_remove_connection_metadata() {
+  [[ -f "${CONNECTION_FILE}" ]] || return 1
+  [[ "${CONNECTION_FILE_EXPLICIT}" == "0" ]]
 }
 
 main() {
@@ -220,6 +241,13 @@ main() {
     rm -f "${TF_VARS_FILE}"
   else
     printf 'Keeping Terraform variables: %s\n' "${TF_VARS_FILE}"
+  fi
+
+  print_stage "cleaning up connection metadata"
+  if should_remove_connection_metadata; then
+    rm -f "${CONNECTION_FILE}"
+  elif [[ -f "${CONNECTION_FILE}" ]]; then
+    printf 'Keeping connection metadata: %s\n' "${CONNECTION_FILE}"
   fi
 
   printf '\nDown:\n'
