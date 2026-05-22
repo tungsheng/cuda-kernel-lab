@@ -150,23 +150,33 @@ Recommended live command:
   --run-id <run-id> \
   --only-decode-step \
   --include-decode-bucket-sweep \
-  --include-decode-tail-sweep
+  --include-decode-tail-sweep \
+  --decode-attention-backend sdpa-head-major \
+  --decode-dynamic-copy-mode resident \
+  --decode-piecewise-post-mode eager \
+  --decode-orchestration-timing off \
+  --decode-tail-buckets '1,2,3,4,5,6,7,8'
 ```
 
-The tail sweep compares the default low-padding, middle, and dense bucket
-policies. Pass `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when the next
-optimization question needs a custom policy pair.
-Pass `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
-the resident-KV-cache dynamic graph path where the current activation still
-needs staging. Switch to `--decode-attention-backend sdpa-head-major` to
-prelayout resident KV cache as `(batch, heads, sequence, dim)` for SDPA replay.
-Switch to `--decode-dynamic-copy-mode resident` for the synthetic
-fully-resident upper-bound path. Add `--decode-piecewise-post-mode eager` when
-the experiment is whether the tiny post-attention add should stay outside CUDA
-Graph replay.
-Add `--decode-orchestration-timing off` to measure the dynamic hot loop without
-per-region host timing probes after the useful breakdown has already identified
-the next bottleneck.
+This command matches the latest saved decode optimization path. It uses
+head-major resident KV views for SDPA, same-stream piecewise CUDA Graph replay,
+an eager post-attention add, dense graph buckets, and hot-loop timing without
+per-region probes.
+
+Saved A10G evidence from `2026-05-22-round12-kv-active-views`:
+
+- fixed-shape `fused-piecewise-graph-same-stream`: `0.1375 ms` p50
+- dynamic dense-bucket same-stream graph tail seeds: `0.155-0.158 ms` p50 and
+  `0.228-0.232 ms` p95
+- dense `1,2,3,4,5,6,7,8` buckets had zero padding; coarser policies reduced
+  captures but introduced padding at skipped active batch sizes
+- all correctness checks passed in the saved report
+
+Use `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when the question is bucket
+policy tradeoff. Use `--decode-dynamic-copy-mode x-only` when the current
+activation should still be staged while KV cache is modeled as resident. Turn
+orchestration timing back on when the next bottleneck needs a per-region host
+breakdown.
 
 Recommended dynamic trace command:
 

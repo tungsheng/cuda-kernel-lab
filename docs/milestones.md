@@ -15,7 +15,7 @@ the lesson is always the optimization strategy and the benchmark evidence.
 | 6 | matmul tiling progression | tile-shape sweep added |
 | 7 | Tensor Core matmul | launch sweep active |
 | 8 | attention microkernel optimization | PyTorch contiguous-KV baseline added |
-| 9 | CUDA Graph replay and final strategy comparison | dynamic piecewise decode-step benchmark added |
+| 9 | CUDA Graph replay and dynamic decode scheduling | resident same-stream piecewise graph path benchmarked |
 
 ## Success Criteria
 
@@ -29,3 +29,12 @@ Each milestone should leave behind enough code and notes to explain:
 
 Use [Optimization Strategies](optimization-strategies.md) for the comparison
 pattern.
+
+## Current Decode Evidence
+
+The latest saved A10G decode evidence is
+`experiments/reports/aws-ec2/2026-05-22-round12-kv-active-views.md`. It
+benchmarks resident head-major KV views, same-stream piecewise CUDA Graph
+replay, eager post-add, dense batch buckets, and hot-loop timing with
+orchestration probes off. Treat it as the current synthetic resident-KV upper
+bound for milestone 9.

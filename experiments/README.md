@@ -36,6 +36,23 @@ For the matmul/Tensor Core track, include the focused tile-shape sweep:
 ./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
+For the current decode-step graph track, keep the note focused on resident
+head-major KV cache, same-stream piecewise graph replay, and multi-seed tail
+latency:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --only-decode-step \
+  --include-decode-bucket-sweep \
+  --include-decode-tail-sweep \
+  --decode-attention-backend sdpa-head-major \
+  --decode-dynamic-copy-mode resident \
+  --decode-piecewise-post-mode eager \
+  --decode-orchestration-timing off \
+  --decode-tail-buckets '1,2,3,4,5,6,7,8'
+```
+
 Manual live-GPU matrix collection:
 
 ```bash

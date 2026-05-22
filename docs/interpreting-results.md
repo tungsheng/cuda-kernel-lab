@@ -37,6 +37,30 @@ Ask these in order:
 - Treating a `naive` traffic model run as a different softmax kernel. It only
   changes the denominator used for effective bandwidth.
 
+## Decode-Step Dynamic Rows
+
+For dynamic decode rows, read these fields together:
+
+- `p50_ms`, `p95_ms`, and `p99_ms`: hot-loop latency for one synthetic scheduler step.
+- `tokens_per_second` and `tokens_per_second_at_host_p95`: synthetic throughput from
+  active tokens per step, not a full model serving number.
+- `graph_hit_rate_pct`: whether the trace used already-captured graph buckets.
+- `padding_waste_pct`: extra bucket capacity used to avoid recapture.
+- `scheduler_cpu_p95_us`: host-side scheduler/hot-loop cost.
+- `bucket_breakdown`: which active batch size caused the worst tail latency.
+
+When `orchestration_timing` is `off`, per-region host breakdowns are absent by
+design, but the row still reports total host step and scheduler timing. Use
+`orchestration_timing=on` first to find a bottleneck, then turn it off for the
+production-like timing comparison.
+
+Recent A10G decode evidence in
+`experiments/reports/aws-ec2/2026-05-22-round12-kv-active-views.md` shows the
+best saved dynamic path as `dynamic-piecewise-graph-same-stream` with
+`sdpa-head-major`, `resident`, eager post-add, orchestration timing off, and
+dense `1,2,3,4,5,6,7,8` buckets. The three tail seeds landed around
+`0.155-0.158 ms` p50 and `0.228-0.232 ms` p95 with zero padding.
+
 ## Result Summary Template
 
 ```text

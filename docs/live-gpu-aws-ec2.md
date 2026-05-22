@@ -50,18 +50,24 @@ Run more benchmark experiments without another Terraform apply/destroy cycle:
 ./scripts/benchmark --run-id <second-run-id> --include-matmul-sweep
 ```
 
-For decode-step graph and dynamic batching iterations, skip the full matrix:
+For the current decode-step graph and dynamic batching track, skip the full
+matrix and run the resident head-major KV path directly:
 
 ```bash
 ./scripts/benchmark \
   --run-id <run-id> \
   --only-decode-step \
   --include-decode-bucket-sweep \
-  --include-decode-tail-sweep
+  --include-decode-tail-sweep \
+  --decode-attention-backend sdpa-head-major \
+  --decode-dynamic-copy-mode resident \
+  --decode-piecewise-post-mode eager \
+  --decode-orchestration-timing off \
+  --decode-tail-buckets '1,2,3,4,5,6,7,8'
 ```
 
-Capture the current recommended evidence bundle before moving from matmul into
-attention work:
+Use the broader evidence bundle when you want matmul, RMSNorm, attention, and
+decode-step evidence in one run:
 
 ```bash
 ./scripts/benchmark \
@@ -189,25 +195,14 @@ When `--include-decode-step` or `--only-decode-step` is set, profiling adds the
 fixed-shape synthetic decode-step modes plus dynamic eager, ordered piecewise
 graph, and same-stream piecewise graph targets. Use those Nsight summaries for
 the occupancy and HBM-counter side of the graph replay comparison. The matrix
-also writes a dynamic trace to `decode-step-dynamic.jsonl` for scheduler metrics
-such as graph hit rate, padding waste, scheduler decision latency,
-phase/bucket latency breakdowns, and host-side orchestration timing. Add
-`--include-decode-tail-sweep` when p95/p99 stability is the experiment
-question; it runs longer same-stream dynamic traces across multiple seeds for
-the default low-padding, middle, and dense bucket policies.
-Use `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` to compare a custom policy
-set without editing the matrix code.
-Use `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
-the resident-KV-cache dynamic piecewise graph experiment, where only the
-current activation is staged into graph-owned buffers. Switch to
-`--decode-attention-backend sdpa-head-major` when testing whether prelaid-out
-resident KV cache improves SDPA replay. Switch to
-`--decode-dynamic-copy-mode resident` for a synthetic fully-resident upper-bound
-run with no per-step input staging, and add `--decode-piecewise-post-mode eager`
-when testing whether the post-attention add is better left outside the captured
-graph.
-Add `--decode-orchestration-timing off` when comparing the production-like
-dynamic hot loop without per-region host timing probes.
+also writes dynamic traces for graph hit rate, padding waste, scheduler cost,
+phase and bucket latency, and tail behavior.
+
+Use dense `1,2,3,4,5,6,7,8` buckets for the current resident upper-bound path.
+Use `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` to compare coarser policies.
+Use `--decode-dynamic-copy-mode x-only` when only the current activation should
+be staged. Turn `--decode-orchestration-timing` back on when you need
+per-region host timing probes.
 
 The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

@@ -108,28 +108,18 @@ uv run benchmark-decode-step --dynamic-trace --mode all --device cuda --dtype fl
 
 The dynamic trace replays variable active batch sizes and sequence lengths into
 batch buckets. It reports graph hit rate, padding waste, synthetic queue wait,
-host step CPU time, scheduler decision latency when graph buckets are used,
-batch occupancy, and prefill/decode/mixed step counts. Each dynamic result also
-includes phase and bucket breakdowns for latency,
-tokens/sec, sequence length, queue wait, padding waste, tail ratios, and
-host-side orchestration timing. The default dynamic graph ordering treats
-same-stream piecewise replay as the primary graph path while retaining ordered
-piecewise replay for A/B comparison.
+host step CPU time, scheduler latency, batch occupancy, and prefill/decode/mixed
+step counts. Each dynamic result also includes phase and bucket breakdowns for
+latency, tokens/sec, sequence length, queue wait, padding waste, and tail ratios.
+Leave orchestration timing on when you need per-region host timings; turn it off
+when the question is production-like hot-loop cost.
 
-Use `--attention-backend sdpa` to exercise PyTorch scaled dot-product attention
-inside the decode-step attention region. Use `--attention-backend
-sdpa-head-major` when resident KV-cache experiments should prelayout keys and
-values as `(batch, heads, sequence, dim)` for SDPA. Use `--dynamic-copy-mode
-x-only` for dynamic piecewise graph replay when the KV cache should be modeled
-as resident and only the graph input activation needs staging. Use
-`--dynamic-copy-mode resident` for the synthetic upper-bound path where graph
-inputs are already resident and no per-step staging is needed. Use
-`--piecewise-post-mode eager` to A/B the tiny post-attention add as an eager
-operation instead of replaying it as a captured graph.
-Pass `--orchestration-timing off` on `benchmark-decode-step`, or
-`--decode-orchestration-timing off` through `scripts/benchmark`, when the
-experiment needs production-like hot-loop timing without per-region
-`perf_counter` probes.
+Use `--attention-backend sdpa-head-major` for resident KV-cache experiments that
+prelayout keys and values as `(batch, heads, sequence, dim)` for SDPA. Use
+`--dynamic-copy-mode resident` for the synthetic fully-resident upper bound.
+Use `--dynamic-copy-mode x-only` when the KV cache is resident but the current
+activation still needs staging. Use `--piecewise-post-mode eager` when the tiny
+post-attention add should stay outside captured graph replay.
 
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.
@@ -164,23 +154,30 @@ small sweeps into the same run directory when they belong to the same evidence
 note.
 
 For focused decode-step work, skip the default memory/softmax/norms/SwiGLU
-matrix and collect only static plus dynamic decode rows:
+matrix and collect only static plus dynamic decode rows. This is the current
+recommended command for the resident head-major KV path:
 
 ```bash
 uv run benchmark-matrix \
   --output-dir experiments/results/aws-ec2/<run-id> \
   --only-decode-step \
   --include-decode-bucket-sweep \
-  --include-decode-tail-sweep
+  --include-decode-tail-sweep \
+  --decode-attention-backend sdpa-head-major \
+  --decode-dynamic-copy-mode resident \
+  --decode-piecewise-post-mode eager \
+  --decode-orchestration-timing off \
+  --decode-tail-buckets '1,2,3,4,5,6,7,8'
 ```
 
-The bucket sweep compares the low-padding `1,2,3,4,6,8` policy against denser
-and coarser bucket sets. The tail sweep runs longer same-stream dynamic traces
-across multiple seeds for the default low-padding, middle, and dense policies,
-`1,2,3,4,6,8`, `1,2,3,4,5,6,8`, and `1,2,3,4,5,6,7,8`, and writes to
-`decode-step-dynamic-tail.jsonl`. Override the tail comparison with
-`--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when you want a narrower or
-custom policy set.
+The bucket sweep compares dense and coarser bucket sets. Dense
+`1,2,3,4,5,6,7,8` avoids padding for active batch sizes up to 8. Coarser sets,
+such as `1,2,3,4,6,8` or `1,2,4,8`, use fewer graph captures but introduce
+padding at skipped batch sizes. The tail sweep runs longer same-stream dynamic
+traces across multiple seeds and writes to `decode-step-dynamic-tail.jsonl`.
+Override the tail comparison with
+`--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when the question is bucket-policy
+tradeoff rather than the current best resident path.
 
 For AWS EC2 evidence, start one host, run the benchmark matrix, and tear the
 host down after you finish the experiment batch:
@@ -230,6 +227,12 @@ dynamic trace writes to `decode-step-dynamic.jsonl`. Dynamic bucket sweeps write
 to `decode-step-dynamic-buckets.jsonl`; multi-seed tail sweeps write to
 `decode-step-dynamic-tail.jsonl`. Reports include tail rows, worst dynamic
 buckets, and host orchestration regions when those nested metrics are present.
+
+Saved A10G evidence from `2026-05-22-round12-kv-active-views` found the
+same-stream dynamic piecewise graph path at about `0.155-0.158 ms` p50 and
+`0.228-0.232 ms` p95 across three tail seeds with dense buckets, zero padding,
+and all correctness checks passing. Read those rows as a synthetic resident-KV
+upper bound, not as an end-to-end serving result.
 
 ## Save Results
 

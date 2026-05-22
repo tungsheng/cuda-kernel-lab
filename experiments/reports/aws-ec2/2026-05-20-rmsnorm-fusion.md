@@ -19,6 +19,17 @@ Does row-wise RMSNorm fusion explain a real Triton speedup on the A10G benchmark
 ./scripts/live-benchmark --run-id 2026-05-20-technique-metadata-verify --include-matmul-sweep --with-profiling --ingress-cidr 107.115.224.0/20
 ```
 
+That was the historical one-shot script name. The current equivalent is:
+
+```bash
+./scripts/up --ingress-cidr 107.115.224.0/20
+./scripts/benchmark \
+  --run-id 2026-05-20-technique-metadata-verify \
+  --include-matmul-sweep \
+  --with-profiling
+./scripts/down
+```
+
 Focused benchmark command from the run:
 
 ```bash

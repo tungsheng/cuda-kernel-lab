@@ -49,22 +49,27 @@ SSH key under `.aws-gpu/keys/`.
 ./scripts/down
 ```
 
-Run the decode-step graph and dynamic batching workflow without the full matrix.
-Add the tail sweep when you need multi-seed p95/p99 evidence for the current
-same-stream piecewise graph path. By default it compares the low-padding
-`1,2,3,4,6,8`, middle `1,2,3,4,5,6,8`, and dense
-`1,2,3,4,5,6,7,8` policies:
+Run the current decode-step graph and dynamic batching workflow without the full
+matrix:
 
 ```bash
 ./scripts/benchmark \
   --run-id <run-id> \
   --only-decode-step \
   --include-decode-bucket-sweep \
-  --include-decode-tail-sweep
+  --include-decode-tail-sweep \
+  --decode-attention-backend sdpa-head-major \
+  --decode-dynamic-copy-mode resident \
+  --decode-piecewise-post-mode eager \
+  --decode-orchestration-timing off \
+  --decode-tail-buckets '1,2,3,4,5,6,7,8'
 ```
 
-Override the tail policy set with a semicolon-separated list when an experiment
-needs a narrower comparison:
+That command matches the latest saved A10G decode evidence: resident
+head-major KV views, same-stream piecewise CUDA Graph replay, eager post-add,
+and production-like hot-loop timing. Keep the full `1,2,3,4,5,6,7,8` bucket set
+when the experiment should avoid padding; pass a semicolon-separated
+`--decode-tail-buckets` list when comparing coarser bucket policies:
 
 ```bash
 ./scripts/benchmark \
@@ -74,27 +79,9 @@ needs a narrower comparison:
   --decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'
 ```
 
-Use the SDPA attention backend and resident-cache-style graph input staging for
-the current dynamic piecewise graph path. `x-only` models a resident KV cache
-while staging the current activation; `resident` measures the synthetic
-fully-resident upper bound. Add the eager post-attention mode when you want to
-A/B the tiny post-add graph replay against a direct eager add:
-
-```bash
-./scripts/benchmark \
-  --run-id <run-id> \
-  --only-decode-step \
-  --include-decode-tail-sweep \
-  --decode-attention-backend sdpa \
-  --decode-dynamic-copy-mode x-only \
-  --decode-piecewise-post-mode eager \
-  --decode-tail-buckets '1,2,3,4,5,6,7,8'
-```
-
-Add `--decode-orchestration-timing off` after using the breakdown report when
-you want production-like hot-loop timing without per-region host probes.
-Use `--decode-attention-backend sdpa-head-major` with resident KV experiments to
-prelayout cached keys and values as `(batch, heads, sequence, dim)` for SDPA.
+Use `--decode-dynamic-copy-mode x-only` only when the experiment should model a
+resident KV cache while still staging the current activation. Use the default
+orchestration timing when you need per-region host breakdowns.
 
 Add focused Nsight Compute profiler captures to a benchmark run:
 
