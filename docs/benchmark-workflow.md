@@ -117,11 +117,13 @@ same-stream piecewise replay as the primary graph path while retaining ordered
 piecewise replay for A/B comparison.
 
 Use `--attention-backend sdpa` to exercise PyTorch scaled dot-product attention
-inside the decode-step attention region. Use `--dynamic-copy-mode x-only` for
-dynamic piecewise graph replay when the KV cache should be modeled as resident
-and only the graph input activation needs staging. Use `--dynamic-copy-mode
-resident` for the synthetic upper-bound path where graph inputs are already
-resident and no per-step staging is needed. Use
+inside the decode-step attention region. Use `--attention-backend
+sdpa-head-major` when resident KV-cache experiments should prelayout keys and
+values as `(batch, heads, sequence, dim)` for SDPA. Use `--dynamic-copy-mode
+x-only` for dynamic piecewise graph replay when the KV cache should be modeled
+as resident and only the graph input activation needs staging. Use
+`--dynamic-copy-mode resident` for the synthetic upper-bound path where graph
+inputs are already resident and no per-step staging is needed. Use
 `--piecewise-post-mode eager` to A/B the tiny post-attention add as an eager
 operation instead of replaying it as a captured graph.
 Pass `--orchestration-timing off` on `benchmark-decode-step`, or

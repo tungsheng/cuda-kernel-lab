@@ -147,7 +147,7 @@ Options:
   --decode-tail-seeds <csv>
                             Comma-separated tail seeds. Default: benchmark-matrix default.
   --decode-attention-backend <name>
-                            Decode-step attention backend: einsum or sdpa.
+                            Decode-step attention backend: einsum, sdpa, or sdpa-head-major.
                             Default: benchmark-matrix default.
   --decode-dynamic-copy-mode <mode>
                             Dynamic decode-step graph input staging: full, x-only, or resident.
@@ -405,10 +405,10 @@ validate_bucket_policy_list() {
 
 validate_decode_attention_backend() {
   case "$1" in
-    ""|einsum|sdpa)
+    ""|einsum|sdpa|sdpa-head-major)
       ;;
     *)
-      die "--decode-attention-backend must be one of: einsum, sdpa"
+      die "--decode-attention-backend must be one of: einsum, sdpa, sdpa-head-major"
       ;;
   esac
 }

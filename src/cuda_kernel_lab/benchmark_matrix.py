@@ -62,7 +62,7 @@ DEFAULT_DECODE_TAIL_BUCKET_VALUES = (
 DEFAULT_DECODE_TAIL_ITERATIONS = 500
 DEFAULT_DECODE_TAIL_SEEDS = (0, 1, 2)
 DEFAULT_DECODE_ATTENTION_BACKEND = "einsum"
-DECODE_ATTENTION_BACKENDS = ("einsum", "sdpa")
+DECODE_ATTENTION_BACKENDS = ("einsum", "sdpa", "sdpa-head-major")
 DEFAULT_DECODE_DYNAMIC_COPY_MODE = "full"
 DECODE_DYNAMIC_COPY_MODES = ("full", "x-only", "resident")
 DEFAULT_DECODE_PIECEWISE_POST_MODE = "graph"
@@ -187,7 +187,7 @@ def build_matrix(
     if any(seed < 0 for seed in decode_tail_seeds):
         raise ValueError("decode_tail_seeds must be non-negative")
     if decode_attention_backend not in DECODE_ATTENTION_BACKENDS:
-        raise ValueError("decode_attention_backend must be one of einsum, sdpa")
+        raise ValueError("decode_attention_backend must be one of einsum, sdpa, sdpa-head-major")
     if decode_dynamic_copy_mode not in DECODE_DYNAMIC_COPY_MODES:
         raise ValueError("decode_dynamic_copy_mode must be one of full, x-only, resident")
     if decode_piecewise_post_mode not in DECODE_PIECEWISE_POST_MODES:

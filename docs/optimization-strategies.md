@@ -158,10 +158,12 @@ policies. Pass `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when the next
 optimization question needs a custom policy pair.
 Pass `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
 the resident-KV-cache dynamic graph path where the current activation still
-needs staging. Switch to `--decode-dynamic-copy-mode resident` for the
-synthetic fully-resident upper-bound path. Add `--decode-piecewise-post-mode
-eager` when the experiment is whether the tiny post-attention add should stay
-outside CUDA Graph replay.
+needs staging. Switch to `--decode-attention-backend sdpa-head-major` to
+prelayout resident KV cache as `(batch, heads, sequence, dim)` for SDPA replay.
+Switch to `--decode-dynamic-copy-mode resident` for the synthetic
+fully-resident upper-bound path. Add `--decode-piecewise-post-mode eager` when
+the experiment is whether the tiny post-attention add should stay outside CUDA
+Graph replay.
 Add `--decode-orchestration-timing off` to measure the dynamic hot loop without
 per-region host timing probes after the useful breakdown has already identified
 the next bottleneck.

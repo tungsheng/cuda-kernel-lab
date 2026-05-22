@@ -200,6 +200,8 @@ set without editing the matrix code.
 Use `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
 the resident-KV-cache dynamic piecewise graph experiment, where only the
 current activation is staged into graph-owned buffers. Switch to
+`--decode-attention-backend sdpa-head-major` when testing whether prelaid-out
+resident KV cache improves SDPA replay. Switch to
 `--decode-dynamic-copy-mode resident` for a synthetic fully-resident upper-bound
 run with no per-step input staging, and add `--decode-piecewise-post-mode eager`
 when testing whether the post-attention add is better left outside the captured

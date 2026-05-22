@@ -295,7 +295,7 @@ def test_matrix_can_select_decode_dynamic_copy_mode() -> None:
         include_decode_tail_sweep=True,
         decode_tail_bucket_values=("1,2,4,8",),
         decode_tail_seeds=(0,),
-        decode_attention_backend="sdpa",
+        decode_attention_backend="sdpa-head-major",
         decode_dynamic_copy_mode="resident",
         decode_piecewise_post_mode="eager",
         decode_orchestration_timing="off",
@@ -309,7 +309,7 @@ def test_matrix_can_select_decode_dynamic_copy_mode() -> None:
     ]
 
     assert dynamic_lines
-    assert all("--attention-backend sdpa" in line for line in dynamic_lines)
+    assert all("--attention-backend sdpa-head-major" in line for line in dynamic_lines)
     assert all("--dynamic-copy-mode resident" in line for line in dynamic_lines)
     assert all("--piecewise-post-mode eager" in line for line in dynamic_lines)
     assert all("--orchestration-timing off" in line for line in dynamic_lines)

@@ -93,6 +93,8 @@ A/B the tiny post-add graph replay against a direct eager add:
 
 Add `--decode-orchestration-timing off` after using the breakdown report when
 you want production-like hot-loop timing without per-region host probes.
+Use `--decode-attention-backend sdpa-head-major` with resident KV experiments to
+prelayout cached keys and values as `(batch, heads, sequence, dim)` for SDPA.
 
 Add focused Nsight Compute profiler captures to a benchmark run:
 

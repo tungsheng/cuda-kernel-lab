@@ -40,7 +40,7 @@ DYNAMIC_MODES = (
     "dynamic-piecewise-graph",
 )
 MODES = (*STATIC_MODES, *DYNAMIC_MODES)
-ATTENTION_BACKENDS = ("einsum", "sdpa")
+ATTENTION_BACKENDS = ("einsum", "sdpa", "sdpa-head-major")
 DYNAMIC_COPY_MODES = ("full", "x-only", "resident")
 PIECEWISE_POST_MODES = ("graph", "eager")
 ORCHESTRATION_TIMING_MODES = ("on", "off")
@@ -75,6 +75,8 @@ class DecodeStepInputs:
     up_weight: Any
     key_cache: Any
     value_cache: Any
+    key_cache_head_major: Any | None = None
+    value_cache_head_major: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -200,6 +202,20 @@ class PiecewiseGraphRuntime:
 
     def _attention_context_flat(self, *, active: int, length: int) -> Any:
         query = _query_view(self.q_flat[:active], self.inputs)
+        if self.attention_backend == "sdpa-head-major":
+            if (
+                self.inputs.key_cache_head_major is None
+                or self.inputs.value_cache_head_major is None
+            ):
+                raise ValueError("sdpa-head-major requires resident head-major KV caches")
+            context = _decode_attention_sdpa_head_major(
+                self.torch,
+                query,
+                self.inputs.key_cache_head_major[:active, :, :length],
+                self.inputs.value_cache_head_major[:active, :, :length],
+            )
+            return context.flatten(start_dim=1)
+
         context = _decode_attention_batched(
             self.torch,
             query,
@@ -827,6 +843,11 @@ def run_dynamic_trace(
         raise ValueError(f"unknown dynamic copy mode: {dynamic_copy_mode}")
     if piecewise_post_mode not in PIECEWISE_POST_MODES:
         raise ValueError(f"unknown piecewise post mode: {piecewise_post_mode}")
+    if attention_backend == "sdpa-head-major" and dynamic_copy_mode not in {
+        "resident",
+        "x-only",
+    }:
+        raise ValueError("sdpa-head-major requires resident or x-only dynamic copy mode")
 
     kernel_strategy = "fused" if device == "cuda" and triton_fused_available() else "naive"
     launch_strategy = dynamic_launch_strategy(mode)
@@ -841,6 +862,10 @@ def run_dynamic_trace(
             post_mode=piecewise_post_mode,
             warmup=warmup,
             stream_strategy=piecewise_stream_strategy(launch_strategy),
+        )
+        runtime_by_active_batch = tuple(
+            graph_cache[choose_batch_bucket(active_batch_size, batch_buckets)]
+            for active_batch_size in range(batch_buckets[-1] + 1)
         )
 
         def run_step(step: TraceStep) -> DynamicStepResult:
@@ -868,15 +893,15 @@ def run_dynamic_trace(
                     },
                 )
 
-            bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
-            runtime = graph_cache[bucket]
-            copy_trace_step_inputs(
-                inputs,
-                runtime.inputs,
-                step=step,
-                copy_mode=dynamic_copy_mode,
-                record_timing=False,
-            )
+            runtime = runtime_by_active_batch[step.active_batch_size]
+            if dynamic_copy_mode != "resident":
+                copy_trace_step_inputs(
+                    inputs,
+                    runtime.inputs,
+                    step=step,
+                    copy_mode=dynamic_copy_mode,
+                    record_timing=False,
+                )
             runtime.replay(
                 active_batch_size=step.active_batch_size,
                 seq_len=step.seq_len,
@@ -1044,10 +1069,46 @@ def build_piecewise_graph_cache(
             up_weight=inputs.up_weight,
             key_cache=torch.empty_like(inputs.key_cache[:bucket]),
             value_cache=torch.empty_like(inputs.value_cache[:bucket]),
+            key_cache_head_major=(
+                torch.empty(
+                    (
+                        bucket,
+                        inputs.key_cache.shape[2],
+                        inputs.key_cache.shape[1],
+                        inputs.key_cache.shape[3],
+                    ),
+                    device=inputs.key_cache.device,
+                    dtype=inputs.key_cache.dtype,
+                )
+                if attention_backend == "sdpa-head-major"
+                else None
+            ),
+            value_cache_head_major=(
+                torch.empty(
+                    (
+                        bucket,
+                        inputs.value_cache.shape[2],
+                        inputs.value_cache.shape[1],
+                        inputs.value_cache.shape[3],
+                    ),
+                    device=inputs.value_cache.device,
+                    dtype=inputs.value_cache.dtype,
+                )
+                if attention_backend == "sdpa-head-major"
+                else None
+            ),
         )
         bucket_inputs.x.copy_(inputs.x[:bucket])
         bucket_inputs.key_cache.copy_(inputs.key_cache[:bucket])
         bucket_inputs.value_cache.copy_(inputs.value_cache[:bucket])
+        if bucket_inputs.key_cache_head_major is not None:
+            bucket_inputs.key_cache_head_major.copy_(
+                inputs.key_cache[:bucket].transpose(1, 2)
+            )
+        if bucket_inputs.value_cache_head_major is not None:
+            bucket_inputs.value_cache_head_major.copy_(
+                inputs.value_cache[:bucket].transpose(1, 2)
+            )
         cache[bucket] = prepare_piecewise_graph_runtime(
             torch=torch,
             inputs=bucket_inputs,
@@ -1117,6 +1178,14 @@ def copy_trace_step_inputs(
         region_start = perf_counter() if record_timing else None
         target.key_cache[:active, :length].copy_(source.key_cache[:active, :length])
         target.value_cache[:active, :length].copy_(source.value_cache[:active, :length])
+        if target.key_cache_head_major is not None:
+            target.key_cache_head_major[:active, :, :length].copy_(
+                source.key_cache[:active, :length].transpose(1, 2)
+            )
+        if target.value_cache_head_major is not None:
+            target.value_cache_head_major[:active, :, :length].copy_(
+                source.value_cache[:active, :length].transpose(1, 2)
+            )
         if record_timing:
             regions["input_kv_copy_host_ms"] = (perf_counter() - region_start) * 1_000
 
@@ -1532,6 +1601,13 @@ def _decode_attention_batched_backend(
         return _decode_attention_einsum(torch, query, key_cache, value_cache)
     if backend == "sdpa":
         return _decode_attention_sdpa(torch, query, key_cache, value_cache)
+    if backend == "sdpa-head-major":
+        return _decode_attention_sdpa_head_major(
+            torch,
+            query,
+            key_cache.transpose(1, 2).contiguous(),
+            value_cache.transpose(1, 2).contiguous(),
+        )
     raise ValueError(f"unknown attention backend: {backend}")
 
 
@@ -1550,6 +1626,22 @@ def _decode_attention_sdpa(torch: Any, query: Any, key_cache: Any, value_cache: 
         q,
         k,
         v,
+        dropout_p=0.0,
+        is_causal=False,
+    ).squeeze(2)
+
+
+def _decode_attention_sdpa_head_major(
+    torch: Any,
+    query: Any,
+    key_cache_head_major: Any,
+    value_cache_head_major: Any,
+) -> Any:
+    q = query.unsqueeze(2)
+    return torch.nn.functional.scaled_dot_product_attention(
+        q,
+        key_cache_head_major,
+        value_cache_head_major,
         dropout_p=0.0,
         is_causal=False,
     ).squeeze(2)
@@ -1602,6 +1694,19 @@ def prepare_piecewise_graph_runtime(
         raise ValueError("stream_strategy must be one of ordered, same_stream")
     if post_mode not in PIECEWISE_POST_MODES:
         raise ValueError("post_mode must be one of graph, eager")
+
+    if attention_backend == "sdpa-head-major" and inputs.key_cache_head_major is None:
+        inputs = DecodeStepInputs(
+            x=inputs.x,
+            rms_weight=inputs.rms_weight,
+            q_weight=inputs.q_weight,
+            gate_weight=inputs.gate_weight,
+            up_weight=inputs.up_weight,
+            key_cache=inputs.key_cache,
+            value_cache=inputs.value_cache,
+            key_cache_head_major=inputs.key_cache.transpose(1, 2).contiguous(),
+            value_cache_head_major=inputs.value_cache.transpose(1, 2).contiguous(),
+        )
 
     from cuda_kernel_lab.kernels.triton import rmsnorm, swiglu
 
