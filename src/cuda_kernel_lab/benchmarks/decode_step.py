@@ -868,7 +868,7 @@ def run_dynamic_trace(
             for active_batch_size in range(batch_buckets[-1] + 1)
         )
 
-        def run_step(step: TraceStep) -> DynamicStepResult:
+        def run_step(step: TraceStep) -> bool | DynamicStepResult:
             if orchestration_timing:
                 region_start = perf_counter()
                 bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
@@ -906,14 +906,12 @@ def run_dynamic_trace(
                 active_batch_size=step.active_batch_size,
                 seq_len=step.seq_len,
             )
-            return DynamicStepResult(
-                graph_hit=True,
-            )
+            return True
 
         graph_replay = True
     else:
 
-        def run_step(step: TraceStep) -> DynamicStepResult:
+        def run_step(step: TraceStep) -> bool | DynamicStepResult:
             region_start = perf_counter() if orchestration_timing else None
             step_inputs = slice_trace_step_inputs(inputs, step=step)
             fn = build_decode_step_op(
@@ -925,7 +923,7 @@ def run_dynamic_trace(
             )
             if not orchestration_timing:
                 fn()
-                return DynamicStepResult(graph_hit=False)
+                return False
 
             build_ms = (perf_counter() - region_start) * 1_000
             region_start = perf_counter()
@@ -1901,12 +1899,12 @@ def benchmark_dynamic_timed_loop(
         cpu_start = process_time()
         if use_cuda_events:
             start_event.record()
-            step_result = _as_dynamic_step_result(run_step(step))
+            step_result = run_step(step)
             end_event.record()
             end_event.synchronize()
             device_ms = float(start_event.elapsed_time(end_event))
         else:
-            step_result = _as_dynamic_step_result(run_step(step))
+            step_result = run_step(step)
             _synchronize(torch, device)
             device_ms = (perf_counter() - host_start) * 1_000
         cpu_ms = (process_time() - cpu_start) * 1_000
@@ -1916,9 +1914,12 @@ def benchmark_dynamic_timed_loop(
         device_latencies_ms.append(device_ms)
         cpu_latencies_ms.append(cpu_ms)
         scheduler_cpu_latencies_ms.append(scheduler_cpu_ms)
-        graph_hits += int(step_result.graph_hit)
-        for region_name, region_ms in step_result.regions_ms.items():
-            region_latencies_ms.setdefault(region_name, []).append(region_ms)
+        if isinstance(step_result, DynamicStepResult):
+            graph_hits += int(step_result.graph_hit)
+            for region_name, region_ms in step_result.regions_ms.items():
+                region_latencies_ms.setdefault(region_name, []).append(region_ms)
+        else:
+            graph_hits += int(step_result)
 
     return DynamicTimedLoop(
         timings=TimedLoop(
@@ -1931,12 +1932,6 @@ def benchmark_dynamic_timed_loop(
         recapture_count=0,
         region_latencies_ms=region_latencies_ms,
     )
-
-
-def _as_dynamic_step_result(value: bool | DynamicStepResult) -> DynamicStepResult:
-    if isinstance(value, DynamicStepResult):
-        return value
-    return DynamicStepResult(graph_hit=value)
 
 
 def timing_metrics(
