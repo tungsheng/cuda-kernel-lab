@@ -64,9 +64,11 @@ DEFAULT_DECODE_TAIL_SEEDS = (0, 1, 2)
 DEFAULT_DECODE_ATTENTION_BACKEND = "einsum"
 DECODE_ATTENTION_BACKENDS = ("einsum", "sdpa")
 DEFAULT_DECODE_DYNAMIC_COPY_MODE = "full"
-DECODE_DYNAMIC_COPY_MODES = ("full", "x-only")
+DECODE_DYNAMIC_COPY_MODES = ("full", "x-only", "resident")
 DEFAULT_DECODE_PIECEWISE_POST_MODE = "graph"
 DECODE_PIECEWISE_POST_MODES = ("graph", "eager")
+DEFAULT_DECODE_ORCHESTRATION_TIMING = "on"
+DECODE_ORCHESTRATION_TIMINGS = ("on", "off")
 DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES = (512, 1024, 2048)
 DEFAULT_REDUCTION_STRATEGY = "iterative"
 DEFAULT_REDUCTION_SWEEP_STRATEGIES = ("iterative", "two_pass")
@@ -126,6 +128,7 @@ def build_matrix(
     decode_attention_backend: str = DEFAULT_DECODE_ATTENTION_BACKEND,
     decode_dynamic_copy_mode: str = DEFAULT_DECODE_DYNAMIC_COPY_MODE,
     decode_piecewise_post_mode: str = DEFAULT_DECODE_PIECEWISE_POST_MODE,
+    decode_orchestration_timing: str = DEFAULT_DECODE_ORCHESTRATION_TIMING,
     include_vector_add_sweep: bool = False,
     vector_add_sweep_block_sizes: tuple[int, ...] = DEFAULT_VECTOR_ADD_SWEEP_BLOCK_SIZES,
     reduction_strategy: str = DEFAULT_REDUCTION_STRATEGY,
@@ -186,9 +189,11 @@ def build_matrix(
     if decode_attention_backend not in DECODE_ATTENTION_BACKENDS:
         raise ValueError("decode_attention_backend must be one of einsum, sdpa")
     if decode_dynamic_copy_mode not in DECODE_DYNAMIC_COPY_MODES:
-        raise ValueError("decode_dynamic_copy_mode must be one of full, x-only")
+        raise ValueError("decode_dynamic_copy_mode must be one of full, x-only, resident")
     if decode_piecewise_post_mode not in DECODE_PIECEWISE_POST_MODES:
         raise ValueError("decode_piecewise_post_mode must be one of graph, eager")
+    if decode_orchestration_timing not in DECODE_ORCHESTRATION_TIMINGS:
+        raise ValueError("decode_orchestration_timing must be one of on, off")
     if any(block_size <= 0 for block_size in vector_add_sweep_block_sizes):
         raise ValueError("vector_add_sweep_block_sizes must be positive")
     if reduction_strategy not in REDUCTION_STRATEGIES:
@@ -522,6 +527,7 @@ def build_matrix(
                 attention_backend=decode_attention_backend,
                 dynamic_copy_mode=decode_dynamic_copy_mode,
                 piecewise_post_mode=decode_piecewise_post_mode,
+                orchestration_timing=decode_orchestration_timing,
             )
         )
     if include_decode_bucket_sweep:
@@ -536,6 +542,7 @@ def build_matrix(
                     attention_backend=decode_attention_backend,
                     dynamic_copy_mode=decode_dynamic_copy_mode,
                     piecewise_post_mode=decode_piecewise_post_mode,
+                    orchestration_timing=decode_orchestration_timing,
                 )
             )
     if include_decode_tail_sweep:
@@ -553,6 +560,7 @@ def build_matrix(
                         attention_backend=decode_attention_backend,
                         dynamic_copy_mode=decode_dynamic_copy_mode,
                         piecewise_post_mode=decode_piecewise_post_mode,
+                        orchestration_timing=decode_orchestration_timing,
                     )
                 )
     return tuple(commands)
@@ -718,6 +726,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Post-attention add mode for dynamic piecewise decode-step replay.",
     )
     parser.add_argument(
+        "--decode-orchestration-timing",
+        choices=DECODE_ORCHESTRATION_TIMINGS,
+        default=DEFAULT_DECODE_ORCHESTRATION_TIMING,
+        help="Per-region host orchestration timing mode for dynamic decode-step traces.",
+    )
+    parser.add_argument(
         "--reduction-strategy",
         choices=REDUCTION_STRATEGIES,
         default=DEFAULT_REDUCTION_STRATEGY,
@@ -786,6 +800,7 @@ def main(argv: list[str] | None = None) -> None:
         decode_attention_backend=args.decode_attention_backend,
         decode_dynamic_copy_mode=args.decode_dynamic_copy_mode,
         decode_piecewise_post_mode=args.decode_piecewise_post_mode,
+        decode_orchestration_timing=args.decode_orchestration_timing,
         include_vector_add_sweep=args.include_vector_add_sweep,
         vector_add_sweep_block_sizes=_parse_block_sizes(args.vector_add_sweep_block_sizes),
         reduction_strategy=args.reduction_strategy,
@@ -863,6 +878,7 @@ def _decode_step_commands(
     attention_backend: str,
     dynamic_copy_mode: str,
     piecewise_post_mode: str,
+    orchestration_timing: str,
 ) -> tuple[MatrixCommand, ...]:
     return (
         _decode_step_static_command(
@@ -881,6 +897,7 @@ def _decode_step_commands(
             attention_backend=attention_backend,
             dynamic_copy_mode=dynamic_copy_mode,
             piecewise_post_mode=piecewise_post_mode,
+            orchestration_timing=orchestration_timing,
         ),
     )
 
@@ -938,6 +955,7 @@ def _decode_step_dynamic_command(
     attention_backend: str = DEFAULT_DECODE_ATTENTION_BACKEND,
     dynamic_copy_mode: str = DEFAULT_DECODE_DYNAMIC_COPY_MODE,
     piecewise_post_mode: str = DEFAULT_DECODE_PIECEWISE_POST_MODE,
+    orchestration_timing: str = DEFAULT_DECODE_ORCHESTRATION_TIMING,
 ) -> MatrixCommand:
     command = [
         "uv",
@@ -957,6 +975,8 @@ def _decode_step_dynamic_command(
         command.extend(("--dynamic-copy-mode", dynamic_copy_mode))
     if piecewise_post_mode != DEFAULT_DECODE_PIECEWISE_POST_MODE:
         command.extend(("--piecewise-post-mode", piecewise_post_mode))
+    if orchestration_timing != DEFAULT_DECODE_ORCHESTRATION_TIMING:
+        command.extend(("--orchestration-timing", orchestration_timing))
     if batch_buckets is not None:
         command.extend(("--batch-buckets", batch_buckets))
     if seed is not None:

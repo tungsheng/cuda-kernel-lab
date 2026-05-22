@@ -8,11 +8,13 @@ except ImportError:
     torch = None
 
 from cuda_kernel_lab.benchmarks.decode_step import (
+    DecodeStepInputs,
     DynamicTimedLoop,
     TimedLoop,
     TraceStep,
     average_trace_flop_count,
     average_trace_memory_traffic_bytes,
+    copy_trace_step_inputs,
     dynamic_timing_metrics,
     generate_dynamic_trace,
     parse_batch_buckets,
@@ -204,6 +206,54 @@ def test_representative_trace_steps_cover_first_seen_buckets() -> None:
         (1, trace[1]),
         (3, trace[3]),
     )
+
+
+@requires_torch
+def test_resident_dynamic_copy_mode_skips_input_staging() -> None:
+    source = DecodeStepInputs(
+        x=torch.ones((2, 4)),
+        rms_weight=torch.ones(4),
+        q_weight=torch.ones((4, 4)),
+        gate_weight=torch.ones((4, 8)),
+        up_weight=torch.ones((4, 8)),
+        key_cache=torch.ones((2, 3, 1, 4)),
+        value_cache=torch.ones((2, 3, 1, 4)),
+    )
+    target = DecodeStepInputs(
+        x=torch.zeros((2, 4)),
+        rms_weight=source.rms_weight,
+        q_weight=source.q_weight,
+        gate_weight=source.gate_weight,
+        up_weight=source.up_weight,
+        key_cache=torch.zeros((2, 3, 1, 4)),
+        value_cache=torch.zeros((2, 3, 1, 4)),
+    )
+
+    regions = copy_trace_step_inputs(
+        source,
+        target,
+        step=TraceStep(active_batch_size=1, seq_len=2, phase="decode", queue_wait_ms=0.0),
+        copy_mode="resident",
+    )
+
+    assert regions == {"input_copy_host_ms": 0.0}
+    assert torch.equal(target.x, torch.zeros_like(target.x))
+    assert torch.equal(target.key_cache, torch.zeros_like(target.key_cache))
+    assert torch.equal(target.value_cache, torch.zeros_like(target.value_cache))
+
+    regions = copy_trace_step_inputs(
+        source,
+        target,
+        step=TraceStep(active_batch_size=1, seq_len=2, phase="decode", queue_wait_ms=0.0),
+        copy_mode="x-only",
+        record_timing=False,
+    )
+
+    assert regions == {}
+    assert torch.equal(target.x[0], torch.ones_like(target.x[0]))
+    assert torch.equal(target.x[1], torch.zeros_like(target.x[1]))
+    assert torch.equal(target.key_cache, torch.zeros_like(target.key_cache))
+    assert torch.equal(target.value_cache, torch.zeros_like(target.value_cache))
 
 
 def test_dynamic_trace_accounting_averages_variable_steps() -> None:

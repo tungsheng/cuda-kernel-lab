@@ -41,8 +41,9 @@ DYNAMIC_MODES = (
 )
 MODES = (*STATIC_MODES, *DYNAMIC_MODES)
 ATTENTION_BACKENDS = ("einsum", "sdpa")
-DYNAMIC_COPY_MODES = ("full", "x-only")
+DYNAMIC_COPY_MODES = ("full", "x-only", "resident")
 PIECEWISE_POST_MODES = ("graph", "eager")
+ORCHESTRATION_TIMING_MODES = ("on", "off")
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_MAX_BATCH_SIZE = 8
 DEFAULT_HIDDEN_DIM = 1024
@@ -134,11 +135,12 @@ class PiecewiseGraphRuntime:
     post_mode: str = "graph"
 
     def replay(self, *, active_batch_size: int | None = None, seq_len: int | None = None) -> Any:
-        output, _ = self.replay_with_stage_timing(
-            active_batch_size=active_batch_size,
-            seq_len=seq_len,
-        )
-        return output
+        self._replay_graph(self.pre_graph)
+        active = active_batch_size if active_batch_size is not None else self.inputs.x.shape[0]
+        length = seq_len if seq_len is not None else self.inputs.key_cache.shape[1]
+        context_flat = self._attention_context_flat(active=active, length=length)
+        self._run_post_region(context_flat=context_flat, active=active)
+        return self.output[:active]
 
     def replay_with_stage_timing(
         self,
@@ -195,6 +197,34 @@ class PiecewiseGraphRuntime:
             raise ValueError(f"unknown piecewise post mode: {self.post_mode}")
 
         return self.output[:active], regions_ms
+
+    def _attention_context_flat(self, *, active: int, length: int) -> Any:
+        query = _query_view(self.q_flat[:active], self.inputs)
+        context = _decode_attention_batched(
+            self.torch,
+            query,
+            self.inputs.key_cache[:active, :length],
+            self.inputs.value_cache[:active, :length],
+            backend=self.attention_backend,
+        )
+        return context.flatten(start_dim=1)
+
+    def _run_post_region(self, *, context_flat: Any, active: int) -> None:
+        if self.post_mode == "graph":
+            self.context_flat[:active].copy_(context_flat)
+            if active < self.context_flat.shape[0]:
+                self.context_flat[active:].zero_()
+            self._replay_graph(self.post_graph)
+            return
+        if self.post_mode == "eager":
+            attention_dim = self.context_flat.shape[1]
+            self.torch.add(
+                context_flat,
+                self.ff[:active, :attention_dim],
+                out=self.output[:active],
+            )
+            return
+        raise ValueError(f"unknown piecewise post mode: {self.post_mode}")
 
     def _replay_graph(self, graph: Any) -> None:
         if self.graph_stream is None:
@@ -270,6 +300,7 @@ def main() -> None:
                 reference_checks=not args.skip_correctness,
                 dynamic_copy_mode=args.dynamic_copy_mode,
                 piecewise_post_mode=args.piecewise_post_mode,
+                orchestration_timing=args.orchestration_timing == "on",
             )
             for mode in modes
         ]
@@ -333,7 +364,8 @@ def parse_args() -> argparse.Namespace:
         default="full",
         help=(
             "Input staging for dynamic piecewise graph replay. full copies x and "
-            "active KV cache slices; x-only models resident KV cache by staging only x."
+            "active KV cache slices; x-only models resident KV cache by staging only x; "
+            "resident skips per-step input staging."
         ),
     )
     parser.add_argument(
@@ -341,6 +373,15 @@ def parse_args() -> argparse.Namespace:
         choices=PIECEWISE_POST_MODES,
         default="graph",
         help="Post-attention add mode for piecewise CUDA Graph replay.",
+    )
+    parser.add_argument(
+        "--orchestration-timing",
+        choices=ORCHESTRATION_TIMING_MODES,
+        default="on",
+        help=(
+            "Record per-region host orchestration timings for dynamic traces. "
+            "Use off for production-like hot-loop timing."
+        ),
     )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--warmup", type=int, default=25)
@@ -772,6 +813,7 @@ def run_dynamic_trace(
     reference_checks: bool,
     dynamic_copy_mode: str,
     piecewise_post_mode: str,
+    orchestration_timing: bool = True,
 ) -> BenchmarkResult:
     """Replay a synthetic dynamic batching trace."""
 
@@ -802,34 +844,52 @@ def run_dynamic_trace(
         )
 
         def run_step(step: TraceStep) -> DynamicStepResult:
-            region_start = perf_counter()
+            if orchestration_timing:
+                region_start = perf_counter()
+                bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
+                runtime = graph_cache[bucket]
+                scheduler_ms = (perf_counter() - region_start) * 1_000
+                copy_regions = copy_trace_step_inputs(
+                    inputs,
+                    runtime.inputs,
+                    step=step,
+                    copy_mode=dynamic_copy_mode,
+                )
+                _, regions_ms = runtime.replay_with_stage_timing(
+                    active_batch_size=step.active_batch_size,
+                    seq_len=step.seq_len,
+                )
+                return DynamicStepResult(
+                    graph_hit=True,
+                    regions_ms={
+                        "scheduler_decision_host_ms": scheduler_ms,
+                        **copy_regions,
+                        **regions_ms,
+                    },
+                )
+
             bucket = choose_batch_bucket(step.active_batch_size, batch_buckets)
             runtime = graph_cache[bucket]
-            scheduler_ms = (perf_counter() - region_start) * 1_000
-            copy_regions = copy_trace_step_inputs(
+            copy_trace_step_inputs(
                 inputs,
                 runtime.inputs,
                 step=step,
                 copy_mode=dynamic_copy_mode,
+                record_timing=False,
             )
-            _, regions_ms = runtime.replay_with_stage_timing(
+            runtime.replay(
                 active_batch_size=step.active_batch_size,
                 seq_len=step.seq_len,
             )
             return DynamicStepResult(
                 graph_hit=True,
-                regions_ms={
-                    "scheduler_decision_host_ms": scheduler_ms,
-                    **copy_regions,
-                    **regions_ms,
-                },
             )
 
         graph_replay = True
     else:
 
         def run_step(step: TraceStep) -> DynamicStepResult:
-            region_start = perf_counter()
+            region_start = perf_counter() if orchestration_timing else None
             step_inputs = slice_trace_step_inputs(inputs, step=step)
             fn = build_decode_step_op(
                 torch,
@@ -838,6 +898,10 @@ def run_dynamic_trace(
                 eps,
                 attention_backend=attention_backend,
             )
+            if not orchestration_timing:
+                fn()
+                return DynamicStepResult(graph_hit=False)
+
             build_ms = (perf_counter() - region_start) * 1_000
             region_start = perf_counter()
             fn()
@@ -926,7 +990,8 @@ def run_dynamic_trace(
             f"mode={mode}, max_batch_size={batch_size}, seq_len={max_seq_len}, "
             f"buckets={','.join(str(bucket) for bucket in batch_buckets)}, "
             f"attention={attention_backend}, copy={dynamic_copy_mode}, "
-            f"post={piecewise_post_mode}"
+            f"post={piecewise_post_mode}, orchestration_timing="
+            f"{'on' if orchestration_timing else 'off'}"
         ),
         parameters={
             "mode": mode,
@@ -945,6 +1010,7 @@ def run_dynamic_trace(
             "attention_backend": attention_backend,
             "dynamic_copy_mode": dynamic_copy_mode,
             "piecewise_post_mode": piecewise_post_mode,
+            "orchestration_timing": "on" if orchestration_timing else "off",
         },
         metrics=metrics,
         optimization=decode_step_optimization(
@@ -1027,28 +1093,35 @@ def copy_trace_step_inputs(
     *,
     step: TraceStep,
     copy_mode: str = "full",
+    record_timing: bool = True,
 ) -> dict[str, float]:
     """Copy active trace tensors into static bucket buffers before graph replay."""
 
     active = step.active_batch_size
     length = step.seq_len
 
-    region_start = perf_counter()
+    if copy_mode == "resident":
+        return {"input_copy_host_ms": 0.0} if record_timing else {}
+    if copy_mode not in {"full", "x-only"}:
+        raise ValueError(f"unknown dynamic copy mode: {copy_mode}")
+
+    region_start = perf_counter() if record_timing else None
     target.x[:active].copy_(source.x[:active])
     if active < target.x.shape[0]:
         target.x[active:].zero_()
-    x_copy_ms = (perf_counter() - region_start) * 1_000
-    regions = {"input_x_copy_host_ms": x_copy_ms}
+    regions = {}
+    if record_timing:
+        regions["input_x_copy_host_ms"] = (perf_counter() - region_start) * 1_000
 
     if copy_mode == "full":
-        region_start = perf_counter()
+        region_start = perf_counter() if record_timing else None
         target.key_cache[:active, :length].copy_(source.key_cache[:active, :length])
         target.value_cache[:active, :length].copy_(source.value_cache[:active, :length])
-        regions["input_kv_copy_host_ms"] = (perf_counter() - region_start) * 1_000
-    elif copy_mode != "x-only":
-        raise ValueError(f"unknown dynamic copy mode: {copy_mode}")
+        if record_timing:
+            regions["input_kv_copy_host_ms"] = (perf_counter() - region_start) * 1_000
 
-    regions["input_copy_host_ms"] = sum(regions.values())
+    if record_timing:
+        regions["input_copy_host_ms"] = sum(regions.values())
     return regions
 
 

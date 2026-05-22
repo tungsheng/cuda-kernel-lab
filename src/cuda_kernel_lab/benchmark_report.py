@@ -930,6 +930,7 @@ def _variant_label(run: dict[str, Any]) -> str:
             "attention_backend",
             "dynamic_copy_mode",
             "piecewise_post_mode",
+            "orchestration_timing",
         ),
     }
     fields = []

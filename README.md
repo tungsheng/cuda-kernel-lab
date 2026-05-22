@@ -75,8 +75,10 @@ needs a narrower comparison:
 ```
 
 Use the SDPA attention backend and resident-cache-style graph input staging for
-the current dynamic piecewise graph path. Add the eager post-attention mode when
-you want to A/B the tiny post-add graph replay against a direct eager add:
+the current dynamic piecewise graph path. `x-only` models a resident KV cache
+while staging the current activation; `resident` measures the synthetic
+fully-resident upper bound. Add the eager post-attention mode when you want to
+A/B the tiny post-add graph replay against a direct eager add:
 
 ```bash
 ./scripts/benchmark \
@@ -88,6 +90,9 @@ you want to A/B the tiny post-add graph replay against a direct eager add:
   --decode-piecewise-post-mode eager \
   --decode-tail-buckets '1,2,3,4,5,6,7,8'
 ```
+
+Add `--decode-orchestration-timing off` after using the breakdown report when
+you want production-like hot-loop timing without per-region host probes.
 
 Add focused Nsight Compute profiler captures to a benchmark run:
 

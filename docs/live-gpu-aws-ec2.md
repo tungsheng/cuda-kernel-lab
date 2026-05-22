@@ -198,9 +198,14 @@ the default low-padding, middle, and dense bucket policies.
 Use `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` to compare a custom policy
 set without editing the matrix code.
 Use `--decode-attention-backend sdpa --decode-dynamic-copy-mode x-only` for
-the current resident-KV-cache dynamic piecewise graph experiment, and add
-`--decode-piecewise-post-mode eager` when testing whether the post-attention add
-is better left outside the captured graph.
+the resident-KV-cache dynamic piecewise graph experiment, where only the
+current activation is staged into graph-owned buffers. Switch to
+`--decode-dynamic-copy-mode resident` for a synthetic fully-resident upper-bound
+run with no per-step input staging, and add `--decode-piecewise-post-mode eager`
+when testing whether the post-attention add is better left outside the captured
+graph.
+Add `--decode-orchestration-timing off` when comparing the production-like
+dynamic hot loop without per-region host timing probes.
 
 The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
 counters are restricted for normal users on the AWS Deep Learning AMI.

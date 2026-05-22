@@ -296,8 +296,9 @@ def test_matrix_can_select_decode_dynamic_copy_mode() -> None:
         decode_tail_bucket_values=("1,2,4,8",),
         decode_tail_seeds=(0,),
         decode_attention_backend="sdpa",
-        decode_dynamic_copy_mode="x-only",
+        decode_dynamic_copy_mode="resident",
         decode_piecewise_post_mode="eager",
+        decode_orchestration_timing="off",
     )
     command_lines = [entry.shell_line() for entry in entries]
     dynamic_lines = [
@@ -309,8 +310,9 @@ def test_matrix_can_select_decode_dynamic_copy_mode() -> None:
 
     assert dynamic_lines
     assert all("--attention-backend sdpa" in line for line in dynamic_lines)
-    assert all("--dynamic-copy-mode x-only" in line for line in dynamic_lines)
+    assert all("--dynamic-copy-mode resident" in line for line in dynamic_lines)
     assert all("--piecewise-post-mode eager" in line for line in dynamic_lines)
+    assert all("--orchestration-timing off" in line for line in dynamic_lines)
     assert all("--piecewise-post-mode eager" in line for line in static_lines)
 
 
@@ -412,6 +414,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
 
     with pytest.raises(ValueError, match="decode_piecewise_post_mode"):
         benchmark_matrix.build_matrix(decode_piecewise_post_mode="skip")
+
+    with pytest.raises(ValueError, match="decode_orchestration_timing"):
+        benchmark_matrix.build_matrix(decode_orchestration_timing="verbose")
 
 
 def test_matrix_parses_strategy_sweep_values(

@@ -119,9 +119,15 @@ piecewise replay for A/B comparison.
 Use `--attention-backend sdpa` to exercise PyTorch scaled dot-product attention
 inside the decode-step attention region. Use `--dynamic-copy-mode x-only` for
 dynamic piecewise graph replay when the KV cache should be modeled as resident
-and only the graph input activation needs staging. Use
+and only the graph input activation needs staging. Use `--dynamic-copy-mode
+resident` for the synthetic upper-bound path where graph inputs are already
+resident and no per-step staging is needed. Use
 `--piecewise-post-mode eager` to A/B the tiny post-attention add as an eager
 operation instead of replaying it as a captured graph.
+Pass `--orchestration-timing off` on `benchmark-decode-step`, or
+`--decode-orchestration-timing off` through `scripts/benchmark`, when the
+experiment needs production-like hot-loop timing without per-region
+`perf_counter` probes.
 
 Use `--backend torch` for a PyTorch-only baseline. Use `--backend triton` when
 you only want the custom Triton implementation.

@@ -91,6 +91,7 @@ DECODE_TAIL_SEEDS=""
 DECODE_ATTENTION_BACKEND=""
 DECODE_DYNAMIC_COPY_MODE=""
 DECODE_PIECEWISE_POST_MODE=""
+DECODE_ORCHESTRATION_TIMING=""
 PROFILE=0
 DRY_RUN=0
 
@@ -149,10 +150,13 @@ Options:
                             Decode-step attention backend: einsum or sdpa.
                             Default: benchmark-matrix default.
   --decode-dynamic-copy-mode <mode>
-                            Dynamic decode-step graph input staging: full or x-only.
+                            Dynamic decode-step graph input staging: full, x-only, or resident.
                             Default: benchmark-matrix default.
   --decode-piecewise-post-mode <mode>
                             Dynamic decode-step post-attention add mode: graph or eager.
+                            Default: benchmark-matrix default.
+  --decode-orchestration-timing <mode>
+                            Dynamic decode-step orchestration timing: on or off.
                             Default: benchmark-matrix default.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
@@ -258,6 +262,11 @@ parse_args() {
       --decode-piecewise-post-mode)
         require_value "$1" "${2:-}"
         DECODE_PIECEWISE_POST_MODE=${2:-}
+        shift 2
+        ;;
+      --decode-orchestration-timing)
+        require_value "$1" "${2:-}"
+        DECODE_ORCHESTRATION_TIMING=${2:-}
         shift 2
         ;;
       --with-profiling)
@@ -406,10 +415,10 @@ validate_decode_attention_backend() {
 
 validate_decode_dynamic_copy_mode() {
   case "$1" in
-    ""|full|x-only)
+    ""|full|x-only|resident)
       ;;
     *)
-      die "--decode-dynamic-copy-mode must be one of: full, x-only"
+      die "--decode-dynamic-copy-mode must be one of: full, x-only, resident"
       ;;
   esac
 }
@@ -420,6 +429,16 @@ validate_decode_piecewise_post_mode() {
       ;;
     *)
       die "--decode-piecewise-post-mode must be one of: graph, eager"
+      ;;
+  esac
+}
+
+validate_decode_orchestration_timing() {
+  case "$1" in
+    ""|on|off)
+      ;;
+    *)
+      die "--decode-orchestration-timing must be one of: on, off"
       ;;
   esac
 }
@@ -465,6 +484,7 @@ validate_inputs() {
   validate_decode_attention_backend "${DECODE_ATTENTION_BACKEND}"
   validate_decode_dynamic_copy_mode "${DECODE_DYNAMIC_COPY_MODE}"
   validate_decode_piecewise_post_mode "${DECODE_PIECEWISE_POST_MODE}"
+  validate_decode_orchestration_timing "${DECODE_ORCHESTRATION_TIMING}"
 
   if [[ -z "${KEY_FILE}" ]]; then
     die "missing SSH key file; run ./scripts/up first or pass --key-file"
@@ -573,6 +593,9 @@ remote_benchmark_command() {
   fi
   if [[ -n "${DECODE_PIECEWISE_POST_MODE}" ]]; then
     command+=" --decode-piecewise-post-mode ${DECODE_PIECEWISE_POST_MODE}"
+  fi
+  if [[ -n "${DECODE_ORCHESTRATION_TIMING}" ]]; then
+    command+=" --decode-orchestration-timing ${DECODE_ORCHESTRATION_TIMING}"
   fi
   command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
 
@@ -944,6 +967,9 @@ print_plan() {
   fi
   if [[ -n "${DECODE_PIECEWISE_POST_MODE}" ]]; then
     printf '  Decode-step piecewise post mode: %s\n' "${DECODE_PIECEWISE_POST_MODE}"
+  fi
+  if [[ -n "${DECODE_ORCHESTRATION_TIMING}" ]]; then
+    printf '  Decode-step orchestration timing: %s\n' "${DECODE_ORCHESTRATION_TIMING}"
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"
