@@ -135,6 +135,9 @@ class PiecewiseGraphRuntime:
     graph_stream: Any | None
     attention_backend: str = "einsum"
     post_mode: str = "graph"
+    query_views: tuple[Any, ...] = ()
+    ff_attention_views: tuple[Any, ...] = ()
+    output_views: tuple[Any, ...] = ()
 
     def replay(self, *, active_batch_size: int | None = None, seq_len: int | None = None) -> Any:
         self._replay_graph(self.pre_graph)
@@ -142,7 +145,7 @@ class PiecewiseGraphRuntime:
         length = seq_len if seq_len is not None else self.inputs.key_cache.shape[1]
         context_flat = self._attention_context_flat(active=active, length=length)
         self._run_post_region(context_flat=context_flat, active=active)
-        return self.output[:active]
+        return self.output_views[active]
 
     def replay_with_stage_timing(
         self,
@@ -158,18 +161,10 @@ class PiecewiseGraphRuntime:
 
         active = active_batch_size if active_batch_size is not None else self.inputs.x.shape[0]
         length = seq_len if seq_len is not None else self.inputs.key_cache.shape[1]
-        query = _query_view(self.q_flat[:active], self.inputs)
         region_start = perf_counter()
-        context = _decode_attention_batched(
-            self.torch,
-            query,
-            self.inputs.key_cache[:active, :length],
-            self.inputs.value_cache[:active, :length],
-            backend=self.attention_backend,
-        )
+        context_flat = self._attention_context_flat(active=active, length=length)
         regions_ms["piecewise_attention_host_ms"] = (perf_counter() - region_start) * 1_000
 
-        context_flat = context.flatten(start_dim=1)
         if self.post_mode == "graph":
             region_start = perf_counter()
             self.context_flat[:active].copy_(context_flat)
@@ -185,23 +180,18 @@ class PiecewiseGraphRuntime:
                 perf_counter() - region_start
             ) * 1_000
         elif self.post_mode == "eager":
-            attention_dim = self.context_flat.shape[1]
             region_start = perf_counter()
-            self.torch.add(
-                context_flat,
-                self.ff[:active, :attention_dim],
-                out=self.output[:active],
-            )
+            self._run_post_region(context_flat=context_flat, active=active)
             regions_ms["piecewise_post_eager_host_ms"] = (
                 perf_counter() - region_start
             ) * 1_000
         else:
             raise ValueError(f"unknown piecewise post mode: {self.post_mode}")
 
-        return self.output[:active], regions_ms
+        return self.output_views[active], regions_ms
 
     def _attention_context_flat(self, *, active: int, length: int) -> Any:
-        query = _query_view(self.q_flat[:active], self.inputs)
+        query = self.query_views[active]
         if self.attention_backend == "sdpa-head-major":
             if (
                 self.inputs.key_cache_head_major is None
@@ -233,11 +223,10 @@ class PiecewiseGraphRuntime:
             self._replay_graph(self.post_graph)
             return
         if self.post_mode == "eager":
-            attention_dim = self.context_flat.shape[1]
             self.torch.add(
                 context_flat,
-                self.ff[:active, :attention_dim],
-                out=self.output[:active],
+                self.ff_attention_views[active],
+                out=self.output_views[active],
             )
             return
         raise ValueError(f"unknown piecewise post mode: {self.post_mode}")
@@ -1795,6 +1784,13 @@ def prepare_piecewise_graph_runtime(
         graph_stream=graph_stream,
         attention_backend=attention_backend,
         post_mode=post_mode,
+        query_views=tuple(
+            _query_view(q_flat[:active], inputs) for active in range(batch_size + 1)
+        ),
+        ff_attention_views=tuple(
+            ff[:active, :attention_dim] for active in range(batch_size + 1)
+        ),
+        output_views=tuple(output[:active] for active in range(batch_size + 1)),
     )
 
 
