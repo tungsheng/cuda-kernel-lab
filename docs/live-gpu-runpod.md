@@ -57,6 +57,10 @@ suite with profiling:
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
 ```
 
+Runpod bootstrap installs and validates Nsight Compute by default so
+`--with-profiling` can collect `ncu` CSVs. Use
+`./scripts/up --no-install-nsight-compute` only for benchmark-only Pods.
+
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:
 
@@ -115,5 +119,5 @@ A10G evidence:
 CSV exports and compact summaries. On Runpod, the script runs `ncu` directly
 when the container user is root, or through passwordless `sudo` when available.
 
-If profiling fails because `ncu` is absent, switch to an image/template that
-includes Nsight Compute or install NVIDIA profiling tools during bootstrap.
+If profiling fails because `ncu` is absent, recreate the Pod with the default
+bootstrap path or use an image/template that already includes Nsight Compute.

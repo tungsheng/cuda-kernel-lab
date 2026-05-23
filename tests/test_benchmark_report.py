@@ -269,6 +269,12 @@ def test_render_markdown_includes_h200_roofline_summary(tmp_path: Path) -> None:
     assert "- Peak HBM bandwidth: `4800 GB/s`." in report
     assert "| matmul | matmul | bfloat16 | 4096x4096x4096 | triton |" in report
     assert "| 1365 | 100.7 | 2.098 | 137.4 | 6.943 | compute |" in report
+    assert "## Matmul Gap Summary" in report
+    assert (
+        "| bfloat16 | 4096x4096x4096 | default | 137.4 | 114.5 | 120 | 6.943 | "
+        "profile Tensor Core utilization |"
+    ) in report
+    assert "What do Nsight Compute Tensor Core counters show" in report
 
 
 def test_roofline_summary_keeps_memory_rows_with_many_matmul_rows(tmp_path: Path) -> None:

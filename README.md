@@ -103,6 +103,10 @@ depth rather than the default broad smoke matrix:
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
 ```
 
+Runpod bootstrap installs Nsight Compute by default so profiling can preflight
+`ncu` before the benchmark starts. The H200 suite also includes focused matmul
+tuning rows for the square and asymmetric LLM GEMM shapes.
+
 Use `--platform aws` and explicit key arguments only when you need to align with
 an existing EC2 key pair:
 

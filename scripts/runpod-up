@@ -61,6 +61,10 @@ absolute_path() {
   fi
 }
 
+shell_quote() {
+  printf '%q' "$1"
+}
+
 STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_RUNPOD_STATE_DIR:-${REPO_ROOT}/.runpod}")
 KEY_DIR="${STATE_DIR}/keys"
 CONNECTION_FILE="${CUDA_KERNEL_LAB_CONNECTION_FILE:-${STATE_DIR}/connection.env}"
@@ -75,6 +79,7 @@ RUNPOD_VOLUME_GB=60
 RUNPOD_NETWORK_VOLUME_ID="${CUDA_KERNEL_LAB_RUNPOD_NETWORK_VOLUME_ID:-}"
 RUNPOD_DATA_CENTER_IDS="${CUDA_KERNEL_LAB_RUNPOD_DATA_CENTER_IDS:-}"
 RUNPOD_TERMINATE_AFTER="${CUDA_KERNEL_LAB_RUNPOD_TERMINATE_AFTER:-}"
+RUNPOD_INSTALL_NCU="${CUDA_KERNEL_LAB_RUNPOD_INSTALL_NCU:-1}"
 RUNPOD_NAME="cuda-kernel-lab-gpu"
 RUNPOD_VOLUME_MOUNT_PATH="/workspace"
 RUNPOD_DOCKER_ARGS="${CUDA_KERNEL_LAB_RUNPOD_DOCKER_ARGS:-}"
@@ -110,6 +115,8 @@ Options:
   --network-volume-id <id>       Attach an existing Runpod network volume.
   --data-center-ids <csv>        Preferred Runpod datacenter ids.
   --terminate-after <value>      Pass-through auto-terminate value for runpodctl.
+  --install-nsight-compute       Install and validate ncu during bootstrap. Default.
+  --no-install-nsight-compute    Skip Nsight Compute install for benchmark-only Pods.
   --name <name>                  Pod name. Default: ${RUNPOD_NAME}
   --docker-args <args>           Optional container command arguments.
   --key-file <path>              SSH private key. Default: .runpod/keys/<name>
@@ -188,6 +195,14 @@ parse_args() {
         require_value "$1" "${2:-}"
         RUNPOD_TERMINATE_AFTER=${2:-}
         shift 2
+        ;;
+      --install-nsight-compute)
+        RUNPOD_INSTALL_NCU=1
+        shift
+        ;;
+      --no-install-nsight-compute)
+        RUNPOD_INSTALL_NCU=0
+        shift
         ;;
       --name)
         require_value "$1" "${2:-}"
@@ -284,6 +299,9 @@ validate_inputs() {
   validate_positive_integer "--volume-gb" "${RUNPOD_VOLUME_GB}"
   [[ "${RUNPOD_CLOUD_TYPE}" == "SECURE" || "${RUNPOD_CLOUD_TYPE}" == "COMMUNITY" ]] || {
     die "--cloud-type must be SECURE or COMMUNITY"
+  }
+  [[ "${RUNPOD_INSTALL_NCU}" == "0" || "${RUNPOD_INSTALL_NCU}" == "1" ]] || {
+    die "CUDA_KERNEL_LAB_RUNPOD_INSTALL_NCU must be 0 or 1"
   }
   [[ -n "${RUNPOD_TEMPLATE_ID}" || -n "${RUNPOD_IMAGE}" ]] || {
     die "either --template-id or --image is required"
@@ -568,12 +586,148 @@ sync_repo() {
 }
 
 bootstrap_remote() {
-  ssh_remote "cd ~/${REMOTE_DIR} && \
-    if ! command -v uv >/dev/null 2>&1; then uv_installer=\$(mktemp) && curl -LsSf https://astral.sh/uv/install.sh -o \"\$uv_installer\" && sh \"\$uv_installer\" && rm -f \"\$uv_installer\"; fi && \
-    export PATH=\"\$HOME/.local/bin:\$PATH\" && \
-    uv sync --group dev --extra gpu && \
-    uv run gpu-info && \
-    uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run"
+  ssh_remote \
+    "REMOTE_DIR=$(shell_quote "${REMOTE_DIR}") CUDA_KERNEL_LAB_INSTALL_NCU=$(shell_quote "${RUNPOD_INSTALL_NCU}") bash -s" \
+    <<'REMOTE_BOOTSTRAP'
+set -Eeuo pipefail
+
+find_ncu_bin() {
+  if command -v ncu >/dev/null 2>&1; then
+    command -v ncu
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    /usr/local/cuda/bin/ncu \
+    /opt/nvidia/nsight-compute/*/ncu \
+    /usr/local/NVIDIA-Nsight-Compute*/ncu; do
+    if [[ -x "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_privileged() {
+  if [[ "$(id -u)" == "0" ]]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo -n "$@"
+  else
+    printf 'error: installing Nsight Compute requires root or passwordless sudo\n' >&2
+    return 1
+  fi
+}
+
+cuda_repo_label() {
+  local os_id=""
+  local version_id=""
+
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    os_id=${ID:-}
+    version_id=${VERSION_ID:-}
+  fi
+
+  if [[ "${os_id}" == "ubuntu" && -n "${version_id}" ]]; then
+    printf 'ubuntu%s\n' "${version_id//./}"
+    return 0
+  fi
+  return 1
+}
+
+nsight_compute_package() {
+  local package
+
+  package=$(apt-cache search '^nsight-compute$' 2>/dev/null | awk '{print $1}' | head -n 1)
+  if [[ -n "${package}" ]]; then
+    printf '%s\n' "${package}"
+    return 0
+  fi
+
+  apt-cache search '^nsight-compute' 2>/dev/null \
+    | awk '{print $1}' \
+    | sort -V \
+    | tail -n 1
+}
+
+ensure_cuda_apt_repo() {
+  local repo_label
+  local keyring_deb
+
+  if [[ -e /etc/apt/sources.list.d/cuda-*.list ]] \
+    || [[ -e /etc/apt/sources.list.d/cuda.sources ]]; then
+    return 0
+  fi
+
+  repo_label=$(cuda_repo_label) || {
+    printf 'error: could not infer CUDA apt repo from /etc/os-release\n' >&2
+    return 1
+  }
+  if ! command -v curl >/dev/null 2>&1; then
+    run_privileged apt-get update
+    run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates
+  fi
+  keyring_deb=$(mktemp --suffix=.deb)
+  curl -fsSL \
+    "https://developer.download.nvidia.com/compute/cuda/repos/${repo_label}/x86_64/cuda-keyring_1.1-1_all.deb" \
+    -o "${keyring_deb}"
+  run_privileged dpkg -i "${keyring_deb}"
+  rm -f "${keyring_deb}"
+}
+
+install_nsight_compute() {
+  local ncu_bin
+  local package
+
+  if ncu_bin=$(find_ncu_bin); then
+    "${ncu_bin}" --version | head -n 1
+    return 0
+  fi
+  command -v apt-get >/dev/null 2>&1 || {
+    printf 'error: apt-get is required to install Nsight Compute on this image\n' >&2
+    return 1
+  }
+
+  printf '==> installing Nsight Compute on remote host\n'
+  run_privileged apt-get update
+  package=$(nsight_compute_package)
+  if [[ -z "${package}" ]]; then
+    ensure_cuda_apt_repo
+    run_privileged apt-get update
+    package=$(nsight_compute_package)
+  fi
+  [[ -n "${package}" ]] || {
+    printf 'error: no nsight-compute package was found in apt repositories\n' >&2
+    return 1
+  }
+
+  run_privileged env DEBIAN_FRONTEND=noninteractive apt-get install -y "${package}"
+  ncu_bin=$(find_ncu_bin) || {
+    printf 'error: installed %s but could not locate ncu\n' "${package}" >&2
+    return 1
+  }
+  "${ncu_bin}" --version | head -n 1
+}
+
+cd "${HOME}/${REMOTE_DIR}"
+if ! command -v uv >/dev/null 2>&1; then
+  uv_installer=$(mktemp)
+  curl -LsSf https://astral.sh/uv/install.sh -o "${uv_installer}"
+  sh "${uv_installer}"
+  rm -f "${uv_installer}"
+fi
+export PATH="${HOME}/.local/bin:${PATH}"
+uv sync --group dev --extra gpu
+if [[ "${CUDA_KERNEL_LAB_INSTALL_NCU}" == "1" ]]; then
+  install_nsight_compute
+fi
+uv run gpu-info
+uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
+REMOTE_BOOTSTRAP
 }
 
 print_launch_summary() {
@@ -600,6 +754,11 @@ print_launch_summary() {
   fi
   if [[ -n "${RUNPOD_TERMINATE_AFTER}" ]]; then
     printf '  Terminate after: %s\n' "${RUNPOD_TERMINATE_AFTER}"
+  fi
+  if [[ "${RUNPOD_INSTALL_NCU}" == "1" ]]; then
+    printf '  Nsight Compute: install/validate ncu during bootstrap\n'
+  else
+    printf '  Nsight Compute: skip install\n'
   fi
   printf '  SSH key file: %s\n' "${KEY_FILE}"
   printf '  Remote repo: ~/%s\n' "${REMOTE_DIR}"

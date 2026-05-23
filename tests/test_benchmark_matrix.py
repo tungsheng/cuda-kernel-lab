@@ -203,9 +203,13 @@ def test_h200_roofline_suite_adds_focused_benchmark_tracks() -> None:
     command_lines = [entry.shell_line() for entry in entries]
     matmul_lines = [line for line in command_lines if "results/matmul.jsonl" in line]
     tile_lines = [line for line in command_lines if "results/matmul-tile-shape.jsonl" in line]
+    tuning_lines = [line for line in command_lines if "results/matmul-tuning.jsonl" in line]
 
     assert tile_lines
-    assert all("--input-precision tf32" in line for line in matmul_lines + tile_lines)
+    assert tuning_lines
+    accelerator_matmul_lines = matmul_lines + tile_lines + tuning_lines
+    assert all("--input-precision tf32" in line for line in accelerator_matmul_lines)
+    assert any("--m 512 --n 11008 --k 4096 --dtype bfloat16" in line for line in tuning_lines)
     assert any("--dtype bfloat16" in line for line in command_lines)
     assert any("results/rmsnorm-shape-sweep.jsonl" in line for line in command_lines)
     assert any("results/attention.jsonl" in line for line in command_lines)
@@ -428,6 +432,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="tensor_core_dtypes"):
         benchmark_matrix.build_matrix(tensor_core_dtypes=("float8",))
 
+    with pytest.raises(ValueError, match="matmul_tuning_configs"):
+        benchmark_matrix.build_matrix(matmul_tuning_configs=((128, 128, 64),))
+
     with pytest.raises(ValueError, match="rmsnorm_shape_sweep_shapes"):
         benchmark_matrix.build_matrix(rmsnorm_shape_sweep_shapes=((1024,),))
 
@@ -508,6 +515,11 @@ def test_matrix_parses_strategy_sweep_values(
             "2048x2048x2048",
             "--tensor-core-dtypes",
             "bfloat16",
+            "--include-matmul-tuning-suite",
+            "--matmul-tuning-shapes",
+            "512x4096x11008",
+            "--matmul-tuning-configs",
+            "64x128x32x8x4",
             "--include-attention-baseline",
             "--attention-seq-len",
             "4096",
@@ -536,9 +548,12 @@ def test_matrix_parses_strategy_sweep_values(
     assert "results/matmul.jsonl" in output
     assert "results/matmul-tile-shape.jsonl" in output
     assert "results/matmul-tensor-core.jsonl" in output
+    assert "results/matmul-tuning.jsonl" in output
     assert "--m 2048 --n 2048 --k 2048 --dtype bfloat16" in output
+    assert "--m 512 --n 4096 --k 11008 --dtype bfloat16" in output
     assert "--block-m 16 --block-n 32 --block-k 32" in output
     assert "--block-m 32 --block-n 16 --block-k 32" in output
+    assert "--block-m 64 --block-n 128 --block-k 32 --num-warps 8 --num-stages 4" in output
     assert "--num-warps 8 --num-stages 4" in output
     assert "results/rmsnorm-shape-sweep.jsonl" in output
     assert "--rows 512 --cols 1024 --dtype float16" in output

@@ -111,6 +111,8 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
         "--suite\\ h200-roofline"
     ) in result.stdout
     assert "matmul-tensor-core-bfloat16" in result.stdout
+    assert "matmul-llm-down-bfloat16" in result.stdout
+    assert "find_ncu_bin" in result.stdout
     assert "Profile summaries: profiling/reports/test-run" in result.stdout
 
 

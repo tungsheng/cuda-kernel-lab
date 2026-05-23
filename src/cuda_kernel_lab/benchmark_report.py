@@ -164,6 +164,17 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             ]
         )
 
+    matmul_gap_lines = _matmul_gap_summary_lines(rows)
+    if matmul_gap_lines:
+        lines.extend(
+            [
+                "",
+                "## Matmul Gap Summary",
+                "",
+                *matmul_gap_lines,
+            ]
+        )
+
     lines.extend(
         [
             "",
@@ -586,6 +597,80 @@ def _roofline_bound_label(row: ReportRow, spec: RooflineSpec) -> str:
     return "compute" if intensity >= ridge_point else "memory"
 
 
+def _matmul_gap_summary_lines(rows: list[ReportRow]) -> list[str]:
+    matmul_rows = [row for row in rows if row.primitive == "matmul"]
+    if not matmul_rows:
+        return []
+
+    spec = _roofline_spec_for_rows(rows)
+    groups: dict[tuple[str, tuple[int, ...]], list[ReportRow]] = {}
+    for row in matmul_rows:
+        groups.setdefault((row.dtype, row.shape), []).append(row)
+
+    summaries = []
+    for (dtype, shape), shape_rows in groups.items():
+        torch_rows = [row for row in shape_rows if row.backend == "torch"]
+        triton_rows = [row for row in shape_rows if row.backend == "triton"]
+        if not torch_rows or not triton_rows:
+            continue
+        best_torch = min(torch_rows, key=lambda row: row.p50_ms)
+        best_triton = min(triton_rows, key=lambda row: row.p50_ms)
+        triton_vs_torch_pct = _ratio(best_triton.tflops, best_torch.tflops)
+        if triton_vs_torch_pct is not None:
+            triton_vs_torch_pct *= 100.0
+        peak_pct = _math_peak_pct(best_triton, spec) if spec is not None else None
+        summaries.append(
+            (
+                triton_vs_torch_pct or 0.0,
+                -best_torch.tflops,
+                dtype,
+                shape,
+                best_triton,
+                best_torch,
+                triton_vs_torch_pct,
+                peak_pct,
+            )
+        )
+
+    if not summaries:
+        return []
+
+    lines = [
+        "| Dtype | Shape | Best Triton Variant | Triton TFLOP/s | Torch TFLOP/s | "
+        "Triton/Torch % | Triton Peak % | Next Action |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for (
+        _ratio_sort,
+        _torch_sort,
+        dtype,
+        shape,
+        best_triton,
+        best_torch,
+        triton_vs_torch_pct,
+        peak_pct,
+    ) in sorted(summaries, key=lambda item: (item[0], item[1], item[2], item[3]))[:12]:
+        lines.append(
+            "| "
+            f"{dtype} | {_shape_label(shape)} | {_escape_cell(best_triton.variant)} | "
+            f"{_fmt(best_triton.tflops)} | {_fmt(best_torch.tflops)} | "
+            f"{_fmt_optional(triton_vs_torch_pct)} | {_fmt_optional(peak_pct)} | "
+            f"{_matmul_next_action(triton_vs_torch_pct, peak_pct)} |"
+        )
+    return lines
+
+
+def _matmul_next_action(
+    triton_vs_torch_pct: float | None,
+    peak_pct: float | None,
+) -> str:
+    if triton_vs_torch_pct is not None and triton_vs_torch_pct < 75.0:
+        return "profile shape-specific tiling"
+    if peak_pct is not None and peak_pct < 50.0:
+        return "profile Tensor Core utilization"
+    return "compare residual gap"
+
+
 def _technique_takeaway_lines(rows: list[ReportRow]) -> list[str]:
     lines: list[str] = []
     families = {row.optimization.method_family for row in rows}
@@ -901,6 +986,12 @@ def _next_question(rows: list[ReportRow]) -> str:
     if _noisy_rows(rows):
         return "What does Nsight Compute show for the noisy Triton rows and the largest fused win?"
 
+    if _matmul_gap_targets(rows):
+        return (
+            "What do Nsight Compute Tensor Core counters show for the largest "
+            "Triton matmul gaps?"
+        )
+
     memory_fastest = [row for row in _fastest_rows(rows) if row.primitive == "memory"]
     if memory_fastest and all(row.backend == "torch" for row in memory_fastest):
         return "What does Nsight Compute show for the Triton memory primitive bottleneck?"
@@ -915,6 +1006,30 @@ def _top_triton_wins(rows: list[ReportRow]) -> list[ReportRow]:
         if row.backend == "triton" and row.speedup_vs_torch is not None and row.speedup_vs_torch > 1
     ]
     return sorted(wins, key=lambda row: row.speedup_vs_torch or 0, reverse=True)[:3]
+
+
+def _matmul_gap_targets(rows: list[ReportRow]) -> list[ReportRow]:
+    spec = _roofline_spec_for_rows(rows)
+    groups: dict[tuple[str, tuple[int, ...]], list[ReportRow]] = {}
+    for row in rows:
+        if row.primitive == "matmul":
+            groups.setdefault((row.dtype, row.shape), []).append(row)
+
+    targets = []
+    for shape_rows in groups.values():
+        torch_rows = [row for row in shape_rows if row.backend == "torch"]
+        triton_rows = [row for row in shape_rows if row.backend == "triton"]
+        if not torch_rows or not triton_rows:
+            continue
+        best_torch = min(torch_rows, key=lambda row: row.p50_ms)
+        best_triton = min(triton_rows, key=lambda row: row.p50_ms)
+        speed_ratio = _ratio(best_triton.tflops, best_torch.tflops)
+        peak_pct = _math_peak_pct(best_triton, spec) if spec is not None else None
+        if (speed_ratio is not None and speed_ratio < 0.90) or (
+            peak_pct is not None and peak_pct < 50.0
+        ):
+            targets.append(best_triton)
+    return sorted(targets, key=lambda row: row.tflops, reverse=True)[:3]
 
 
 def _noisy_rows(rows: list[ReportRow]) -> list[ReportRow]:

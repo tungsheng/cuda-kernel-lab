@@ -24,11 +24,16 @@ the benchmark script collect focused profiles and compact summaries:
 ```
 
 For H200 Tensor Core/roofline evidence, use the named suite. This adds larger
-FP16/BF16 matmul rows and extra matmul profile targets for Tensor Core counters:
+FP16/BF16 matmul rows, LLM-shape tuning rows, and extra matmul profile targets
+for Tensor Core counters:
 
 ```bash
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
 ```
+
+`scripts/benchmark --with-profiling` checks for `ncu` before running the matrix.
+Runpod Pods created by `./scripts/up` install and validate Nsight Compute during
+bootstrap unless `--no-install-nsight-compute` is passed.
 
 Add `--include-decode-step` to profile the naive/fused, full-graph, and
 piecewise-graph decode-step modes alongside the standard kernel targets. Use

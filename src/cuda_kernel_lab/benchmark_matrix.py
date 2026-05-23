@@ -51,6 +51,18 @@ DEFAULT_TENSOR_CORE_BLOCK_N = 128
 DEFAULT_TENSOR_CORE_BLOCK_K = 64
 DEFAULT_TENSOR_CORE_NUM_WARPS = 4
 DEFAULT_TENSOR_CORE_NUM_STAGES = 4
+DEFAULT_MATMUL_TUNING_SHAPES = (
+    (4096, 4096, 4096),
+    (512, 4096, 11008),
+    (512, 11008, 4096),
+)
+DEFAULT_MATMUL_TUNING_CONFIGS = (
+    (64, 64, 32, 8, 4),
+    (64, 128, 32, 8, 4),
+    (128, 64, 32, 4, 4),
+    (64, 128, 64, 4, 4),
+    (128, 64, 64, 4, 4),
+)
 DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES = (
     (512, 1024),
     (1024, 2048),
@@ -129,6 +141,9 @@ def build_matrix(
     include_tensor_core_suite: bool = False,
     tensor_core_matmul_shapes: tuple[tuple[int, ...], ...] = DEFAULT_TENSOR_CORE_MATMUL_SHAPES,
     tensor_core_dtypes: tuple[str, ...] = DEFAULT_TENSOR_CORE_DTYPES,
+    include_matmul_tuning_suite: bool = False,
+    matmul_tuning_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_TUNING_SHAPES,
+    matmul_tuning_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_TUNING_CONFIGS,
     include_rmsnorm_shape_sweep: bool = False,
     rmsnorm_shape_sweep_shapes: tuple[tuple[int, ...], ...] = DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES,
     rmsnorm_shape_sweep_dtype: str = DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE,
@@ -170,6 +185,8 @@ def build_matrix(
         include_matmul_sweep = True
         include_rmsnorm_shape_sweep = True
         include_attention_baseline = True
+    if suite == "h200-roofline":
+        include_matmul_tuning_suite = True
 
     if warmup < 0:
         raise ValueError("warmup must be non-negative")
@@ -201,6 +218,14 @@ def build_matrix(
         raise ValueError("tensor_core_dtypes must not be empty")
     if any(dtype not in SUPPORTED_DTYPES for dtype in tensor_core_dtypes):
         raise ValueError("tensor_core_dtypes must be one of float32, float16, bfloat16")
+    if any(len(shape) != 3 for shape in matmul_tuning_shapes):
+        raise ValueError("matmul_tuning_shapes must be MxNxK triples")
+    if any(any(dim <= 0 for dim in shape) for shape in matmul_tuning_shapes):
+        raise ValueError("matmul_tuning_shapes must be positive")
+    if any(len(config) != 5 for config in matmul_tuning_configs):
+        raise ValueError("matmul_tuning_configs must be MxNxKxWARPSxSTAGES values")
+    if any(any(dim <= 0 for dim in config) for config in matmul_tuning_configs):
+        raise ValueError("matmul_tuning_configs must be positive")
     if any(len(shape) != 2 for shape in rmsnorm_shape_sweep_shapes):
         raise ValueError("rmsnorm_shape_sweep_shapes must be ROWSxCOLS pairs")
     if any(any(dim <= 0 for dim in shape) for shape in rmsnorm_shape_sweep_shapes):
@@ -523,6 +548,32 @@ def build_matrix(
                         ),
                     )
                 )
+    if include_matmul_tuning_suite and not only_decode_step:
+        for dtype in tensor_core_dtypes:
+            for m, n, k in matmul_tuning_shapes:
+                for block_m, block_n, block_k, num_warps, num_stages in matmul_tuning_configs:
+                    commands.append(
+                        MatrixCommand(
+                            primitive="matmul",
+                            dtype=dtype,
+                            command=_matmul_command(
+                                device=device,
+                                dtype=dtype,
+                                block_m=block_m,
+                                block_n=block_n,
+                                block_k=block_k,
+                                num_warps=num_warps,
+                                num_stages=num_stages,
+                                input_precision="tf32",
+                                warmup=warmup,
+                                iterations=iterations,
+                                output=output_dir / "matmul-tuning.jsonl",
+                                m=m,
+                                n=n,
+                                k=k,
+                            ),
+                        )
+                    )
     if include_rmsnorm_shape_sweep and not only_decode_step:
         for rows, cols in rmsnorm_shape_sweep_shapes:
             commands.append(
@@ -725,6 +776,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated dtypes for the Tensor Core suite.",
     )
     parser.add_argument(
+        "--include-matmul-tuning-suite",
+        action="store_true",
+        help="Add focused matmul tile tuning rows for large H200/LLM GEMM shapes.",
+    )
+    parser.add_argument(
+        "--matmul-tuning-shapes",
+        default=_join_tile_shapes(DEFAULT_MATMUL_TUNING_SHAPES),
+        help="Comma-separated MxNxK shapes for --include-matmul-tuning-suite.",
+    )
+    parser.add_argument(
+        "--matmul-tuning-configs",
+        default=_join_matmul_tuning_configs(DEFAULT_MATMUL_TUNING_CONFIGS),
+        help=(
+            "Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGES configs for "
+            "--include-matmul-tuning-suite."
+        ),
+    )
+    parser.add_argument(
         "--include-rmsnorm-shape-sweep",
         action="store_true",
         help="Add a focused RMSNorm shape sweep for hidden-size and batch-size evidence.",
@@ -877,6 +946,9 @@ def main(argv: list[str] | None = None) -> None:
         include_tensor_core_suite=args.include_tensor_core_suite,
         tensor_core_matmul_shapes=_parse_tile_shapes(args.tensor_core_matmul_shapes),
         tensor_core_dtypes=_parse_values(args.tensor_core_dtypes),
+        include_matmul_tuning_suite=args.include_matmul_tuning_suite,
+        matmul_tuning_shapes=_parse_tile_shapes(args.matmul_tuning_shapes),
+        matmul_tuning_configs=_parse_matmul_tuning_configs(args.matmul_tuning_configs),
         include_rmsnorm_shape_sweep=args.include_rmsnorm_shape_sweep,
         rmsnorm_shape_sweep_shapes=_parse_shapes(args.rmsnorm_shape_sweep_shapes),
         rmsnorm_shape_sweep_dtype=args.rmsnorm_shape_sweep_dtype,
@@ -1151,6 +1223,25 @@ def _parse_launch_configs(value: str) -> tuple[tuple[int, ...], ...]:
     return tuple(launch_configs)
 
 
+def _parse_matmul_tuning_configs(value: str) -> tuple[tuple[int, ...], ...]:
+    configs = []
+    try:
+        for token in (part.strip() for part in value.split(",")):
+            if not token:
+                continue
+            dimensions = tuple(int(part.strip()) for part in token.lower().split("x"))
+            if len(dimensions) != 5:
+                raise ValueError
+            configs.append(dimensions)
+    except ValueError as exc:
+        raise ValueError(
+            "matmul_tuning_configs must be comma-separated MxNxKxWARPSxSTAGES values"
+        ) from exc
+    if not configs:
+        raise ValueError("matmul_tuning_configs must not be empty")
+    return tuple(configs)
+
+
 def _parse_shapes(value: str) -> tuple[tuple[int, ...], ...]:
     shapes = []
     try:
@@ -1266,6 +1357,13 @@ def _join_tile_shapes(tile_shapes: tuple[tuple[int, int, int], ...]) -> str:
 
 def _join_launch_configs(launch_configs: tuple[tuple[int, int], ...]) -> str:
     return ",".join(f"{num_warps}x{num_stages}" for num_warps, num_stages in launch_configs)
+
+
+def _join_matmul_tuning_configs(configs: tuple[tuple[int, int, int, int, int], ...]) -> str:
+    return ",".join(
+        f"{block_m}x{block_n}x{block_k}x{num_warps}x{num_stages}"
+        for block_m, block_n, block_k, num_warps, num_stages in configs
+    )
 
 
 def _join_shapes(shapes: tuple[tuple[int, int], ...]) -> str:
