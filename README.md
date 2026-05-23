@@ -96,6 +96,13 @@ Move into the matmul/Tensor Core track with the focused tile and launch sweep:
 ./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
+Run the H200 roofline/Tensor Core suite when the goal is CUDA kernel benchmark
+depth rather than the default broad smoke matrix:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
 Use `--platform aws` and explicit key arguments only when you need to align with
 an existing EC2 key pair:
 

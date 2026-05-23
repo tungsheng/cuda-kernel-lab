@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_OUTPUT_DIR = Path("experiments/results/runpod/manual-run")
+DEFAULT_SUITE = "standard"
+SUITES = ("standard", "h200-roofline", "tensor-core")
 DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
 DEFAULT_MEMORY_BLOCK_SIZE = 1024
@@ -35,6 +37,19 @@ DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS = (
     (8, 3),
     (8, 4),
 )
+DEFAULT_TENSOR_CORE_MATMUL_SHAPES = (
+    (1024, 1024, 1024),
+    (2048, 2048, 2048),
+    (4096, 4096, 4096),
+    (512, 4096, 11008),
+    (512, 11008, 4096),
+)
+DEFAULT_TENSOR_CORE_DTYPES = ("float16", "bfloat16")
+DEFAULT_TENSOR_CORE_BLOCK_M = 128
+DEFAULT_TENSOR_CORE_BLOCK_N = 128
+DEFAULT_TENSOR_CORE_BLOCK_K = 64
+DEFAULT_TENSOR_CORE_NUM_WARPS = 4
+DEFAULT_TENSOR_CORE_NUM_STAGES = 4
 DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES = (
     (512, 1024),
     (1024, 2048),
@@ -76,6 +91,7 @@ REDUCTION_STRATEGIES = ("iterative", "two_pass")
 MATMUL_INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
 DEFAULT_DEVICE = "cuda"
 DTYPES = ("float32", "float16")
+SUPPORTED_DTYPES = ("float32", "float16", "bfloat16")
 
 
 @dataclass(frozen=True)
@@ -92,6 +108,7 @@ class MatrixCommand:
 
 def build_matrix(
     *,
+    suite: str = DEFAULT_SUITE,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     device: str = DEFAULT_DEVICE,
     warmup: int = DEFAULT_WARMUP,
@@ -108,6 +125,9 @@ def build_matrix(
     include_matmul_sweep: bool = False,
     matmul_sweep_tile_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_TILE_SHAPES,
     matmul_sweep_launch_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS,
+    include_tensor_core_suite: bool = False,
+    tensor_core_matmul_shapes: tuple[tuple[int, ...], ...] = DEFAULT_TENSOR_CORE_MATMUL_SHAPES,
+    tensor_core_dtypes: tuple[str, ...] = DEFAULT_TENSOR_CORE_DTYPES,
     include_rmsnorm_shape_sweep: bool = False,
     rmsnorm_shape_sweep_shapes: tuple[tuple[int, ...], ...] = DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES,
     rmsnorm_shape_sweep_dtype: str = DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE,
@@ -137,6 +157,13 @@ def build_matrix(
 ) -> tuple[MatrixCommand, ...]:
     """Build the default live-GPU benchmark command matrix."""
 
+    suite = _normalize_suite(suite)
+    if suite in {"h200-roofline", "tensor-core"}:
+        include_tensor_core_suite = True
+        include_matmul_sweep = True
+        include_rmsnorm_shape_sweep = True
+        include_attention_baseline = True
+
     if warmup < 0:
         raise ValueError("warmup must be non-negative")
     if iterations <= 0:
@@ -159,6 +186,14 @@ def build_matrix(
         raise ValueError("matmul_sweep_launch_configs must be WARPSxSTAGES pairs")
     if any(any(dim <= 0 for dim in launch_config) for launch_config in matmul_sweep_launch_configs):
         raise ValueError("matmul_sweep_launch_configs must be positive")
+    if any(len(shape) != 3 for shape in tensor_core_matmul_shapes):
+        raise ValueError("tensor_core_matmul_shapes must be MxNxK triples")
+    if any(any(dim <= 0 for dim in shape) for shape in tensor_core_matmul_shapes):
+        raise ValueError("tensor_core_matmul_shapes must be positive")
+    if not tensor_core_dtypes:
+        raise ValueError("tensor_core_dtypes must not be empty")
+    if any(dtype not in SUPPORTED_DTYPES for dtype in tensor_core_dtypes):
+        raise ValueError("tensor_core_dtypes must be one of float32, float16, bfloat16")
     if any(len(shape) != 2 for shape in rmsnorm_shape_sweep_shapes):
         raise ValueError("rmsnorm_shape_sweep_shapes must be ROWSxCOLS pairs")
     if any(any(dim <= 0 for dim in shape) for shape in rmsnorm_shape_sweep_shapes):
@@ -456,6 +491,31 @@ def build_matrix(
                     ),
                 )
             )
+    if include_tensor_core_suite and not only_decode_step:
+        for dtype in tensor_core_dtypes:
+            for m, n, k in tensor_core_matmul_shapes:
+                commands.append(
+                    MatrixCommand(
+                        primitive="matmul",
+                        dtype=dtype,
+                        command=_matmul_command(
+                            device=device,
+                            dtype=dtype,
+                            block_m=DEFAULT_TENSOR_CORE_BLOCK_M,
+                            block_n=DEFAULT_TENSOR_CORE_BLOCK_N,
+                            block_k=DEFAULT_TENSOR_CORE_BLOCK_K,
+                            num_warps=DEFAULT_TENSOR_CORE_NUM_WARPS,
+                            num_stages=DEFAULT_TENSOR_CORE_NUM_STAGES,
+                            input_precision="tf32",
+                            warmup=warmup,
+                            iterations=iterations,
+                            output=output_dir / "matmul-tensor-core.jsonl",
+                            m=m,
+                            n=n,
+                            k=k,
+                        ),
+                    )
+                )
     if include_rmsnorm_shape_sweep and not only_decode_step:
         for rows, cols in rmsnorm_shape_sweep_shapes:
             commands.append(
@@ -569,6 +629,15 @@ def build_matrix(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--suite",
+        choices=SUITES,
+        default=DEFAULT_SUITE,
+        help=(
+            "Benchmark suite preset. h200-roofline and tensor-core add larger "
+            "matmul, BF16, RMSNorm shape, and attention baseline coverage."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without running them.",
@@ -629,6 +698,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--matmul-sweep-launch-configs",
         default=_join_launch_configs(DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS),
         help="Comma-separated WARPSxSTAGES launch configs for --include-matmul-sweep.",
+    )
+    parser.add_argument(
+        "--include-tensor-core-suite",
+        action="store_true",
+        help="Add larger FP16/BF16 matmul rows for Tensor Core and roofline evidence.",
+    )
+    parser.add_argument(
+        "--tensor-core-matmul-shapes",
+        default=_join_tile_shapes(DEFAULT_TENSOR_CORE_MATMUL_SHAPES),
+        help="Comma-separated MxNxK matmul shapes for the Tensor Core suite.",
+    )
+    parser.add_argument(
+        "--tensor-core-dtypes",
+        default=_join_values(DEFAULT_TENSOR_CORE_DTYPES),
+        help="Comma-separated dtypes for the Tensor Core suite.",
     )
     parser.add_argument(
         "--include-rmsnorm-shape-sweep",
@@ -763,6 +847,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     commands = build_matrix(
+        suite=args.suite,
         output_dir=args.output_dir,
         device=args.device,
         warmup=args.warmup,
@@ -779,6 +864,9 @@ def main(argv: list[str] | None = None) -> None:
         include_matmul_sweep=args.include_matmul_sweep,
         matmul_sweep_tile_shapes=_parse_tile_shapes(args.matmul_sweep_tile_shapes),
         matmul_sweep_launch_configs=_parse_launch_configs(args.matmul_sweep_launch_configs),
+        include_tensor_core_suite=args.include_tensor_core_suite,
+        tensor_core_matmul_shapes=_parse_tile_shapes(args.tensor_core_matmul_shapes),
+        tensor_core_dtypes=_parse_values(args.tensor_core_dtypes),
         include_rmsnorm_shape_sweep=args.include_rmsnorm_shape_sweep,
         rmsnorm_shape_sweep_shapes=_parse_shapes(args.rmsnorm_shape_sweep_shapes),
         rmsnorm_shape_sweep_dtype=args.rmsnorm_shape_sweep_dtype,
@@ -831,6 +919,9 @@ def _matmul_command(
     warmup: int,
     iterations: int,
     output: Path,
+    m: int = 1024,
+    n: int = 1024,
+    k: int = 1024,
 ) -> tuple[str, ...]:
     return (
         "uv",
@@ -841,11 +932,11 @@ def _matmul_command(
         "--device",
         device,
         "--m",
-        "1024",
+        str(m),
         "--n",
-        "1024",
+        str(n),
         "--k",
-        "1024",
+        str(k),
         "--dtype",
         dtype,
         "--block-m",
@@ -1006,6 +1097,12 @@ def _parse_block_sizes(value: str) -> tuple[int, ...]:
     if not block_sizes:
         raise ValueError("vector_add_sweep_block_sizes must not be empty")
     return block_sizes
+
+
+def _normalize_suite(value: str) -> str:
+    if value not in SUITES:
+        raise ValueError("suite must be one of standard, h200-roofline, tensor-core")
+    return value
 
 
 def _parse_tile_shapes(value: str) -> tuple[tuple[int, ...], ...]:

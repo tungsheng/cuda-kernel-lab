@@ -23,6 +23,13 @@ the benchmark script collect focused profiles and compact summaries:
 ./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
+For H200 Tensor Core/roofline evidence, use the named suite. This adds larger
+FP16/BF16 matmul rows and extra matmul profile targets for Tensor Core counters:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
 Add `--include-decode-step` to profile the naive/fused, full-graph, and
 piecewise-graph decode-step modes alongside the standard kernel targets. Use
 `--only-decode-step --with-profiling` when you want only the static and dynamic

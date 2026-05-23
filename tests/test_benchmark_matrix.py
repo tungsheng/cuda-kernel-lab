@@ -166,6 +166,48 @@ def test_matrix_can_include_matmul_strategy_sweep() -> None:
     assert all("--block-m 16 --block-n 16 --block-k 32" not in line for line in sweep_lines)
 
 
+def test_matrix_can_include_tensor_core_suite() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_tensor_core_suite=True,
+        tensor_core_matmul_shapes=((2048, 2048, 2048),),
+        tensor_core_dtypes=("float16", "bfloat16"),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+    tensor_lines = [line for line in command_lines if "matmul-tensor-core.jsonl" in line]
+
+    assert len(entries) == 10
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 2048 --n 2048 --k 2048 "
+        "--dtype float16 --block-m 128 --block-n 128 --block-k 64 "
+        "--num-warps 4 --num-stages 4 --input-precision tf32 "
+        "--warmup 25 --iterations 100 --output results/matmul-tensor-core.jsonl"
+    ) in tensor_lines
+    assert (
+        "uv run benchmark-matmul --backend all --device cuda --m 2048 --n 2048 --k 2048 "
+        "--dtype bfloat16 --block-m 128 --block-n 128 --block-k 64 "
+        "--num-warps 4 --num-stages 4 --input-precision tf32 "
+        "--warmup 25 --iterations 100 --output results/matmul-tensor-core.jsonl"
+    ) in tensor_lines
+
+
+def test_h200_roofline_suite_adds_focused_benchmark_tracks() -> None:
+    entries = benchmark_matrix.build_matrix(
+        suite="h200-roofline",
+        output_dir=Path("results"),
+        tensor_core_matmul_shapes=((2048, 2048, 2048),),
+        tensor_core_dtypes=("bfloat16",),
+        matmul_sweep_tile_shapes=((16, 16, 32), (32, 32, 32)),
+        matmul_sweep_launch_configs=((4, 3),),
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert any("results/matmul-tile-shape.jsonl" in line for line in command_lines)
+    assert any("--dtype bfloat16" in line for line in command_lines)
+    assert any("results/rmsnorm-shape-sweep.jsonl" in line for line in command_lines)
+    assert any("results/attention.jsonl" in line for line in command_lines)
+
+
 def test_matrix_can_include_rmsnorm_shape_sweep() -> None:
     entries = benchmark_matrix.build_matrix(
         output_dir=Path("results"),
@@ -374,6 +416,15 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="matmul_sweep_launch_configs"):
         benchmark_matrix.build_matrix(matmul_sweep_launch_configs=((4, 0),))
 
+    with pytest.raises(ValueError, match="tensor_core_matmul_shapes"):
+        benchmark_matrix.build_matrix(tensor_core_matmul_shapes=((1024, 1024),))
+
+    with pytest.raises(ValueError, match="tensor_core_matmul_shapes"):
+        benchmark_matrix.build_matrix(tensor_core_matmul_shapes=((1024, 1024, 0),))
+
+    with pytest.raises(ValueError, match="tensor_core_dtypes"):
+        benchmark_matrix.build_matrix(tensor_core_dtypes=("float8",))
+
     with pytest.raises(ValueError, match="rmsnorm_shape_sweep_shapes"):
         benchmark_matrix.build_matrix(rmsnorm_shape_sweep_shapes=((1024,),))
 
@@ -422,6 +473,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="decode_orchestration_timing"):
         benchmark_matrix.build_matrix(decode_orchestration_timing="verbose")
 
+    with pytest.raises(ValueError, match="suite"):
+        benchmark_matrix.build_matrix(suite="broad")
+
 
 def test_matrix_parses_strategy_sweep_values(
     capsys: pytest.CaptureFixture[str],
@@ -446,6 +500,11 @@ def test_matrix_parses_strategy_sweep_values(
             "--include-rmsnorm-shape-sweep",
             "--rmsnorm-shape-sweep-shapes",
             "512x1024,4096x8192",
+            "--include-tensor-core-suite",
+            "--tensor-core-matmul-shapes",
+            "2048x2048x2048",
+            "--tensor-core-dtypes",
+            "bfloat16",
             "--include-attention-baseline",
             "--attention-seq-len",
             "4096",
@@ -473,6 +532,8 @@ def test_matrix_parses_strategy_sweep_values(
     assert "uv run benchmark-matmul" in output
     assert "results/matmul.jsonl" in output
     assert "results/matmul-tile-shape.jsonl" in output
+    assert "results/matmul-tensor-core.jsonl" in output
+    assert "--m 2048 --n 2048 --k 2048 --dtype bfloat16" in output
     assert "--block-m 16 --block-n 32 --block-k 32" in output
     assert "--block-m 32 --block-n 16 --block-k 32" in output
     assert "--num-warps 8 --num-stages 4" in output

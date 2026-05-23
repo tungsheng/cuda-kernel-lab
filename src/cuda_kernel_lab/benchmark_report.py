@@ -16,6 +16,12 @@ from cuda_kernel_lab.optimization import (
     technique_from_mapping,
     technique_from_result,
 )
+from cuda_kernel_lab.roofline import (
+    RooflineSpec,
+    arithmetic_intensity,
+    ridge_point_flops_per_byte,
+    spec_for_device_name,
+)
 
 DEFAULT_INPUT_DIR = Path("experiments/results/runpod/manual-run")
 RUN_RESULTS_ROOT = Path("experiments/results/runpod")
@@ -39,7 +45,9 @@ class ReportRow:
     p50_ms: float
     p95_ms: float
     p99_ms: float
+    bytes_moved: int
     bandwidth_gbps: float
+    flops: int
     tflops: float
     speedup_vs_torch: float | None
     noise_ratio: float | None
@@ -138,6 +146,17 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             f"{row.variant} | {row.backend} | {row.optimization.technique} | "
             f"{_fmt(row.p50_ms)} | "
             f"{_fmt(row.bandwidth_gbps)} | {_fmt(row.tflops)} |"
+        )
+
+    roofline_lines = _roofline_summary_lines(rows)
+    if roofline_lines:
+        lines.extend(
+            [
+                "",
+                "## Roofline Summary",
+                "",
+                *roofline_lines,
+            ]
         )
 
     lines.extend(
@@ -303,7 +322,9 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
         p50_ms=float(result["p50_ms"]),
         p95_ms=float(result["p95_ms"]),
         p99_ms=float(result["p99_ms"]),
+        bytes_moved=int(result.get("bytes_moved") or 0),
         bandwidth_gbps=float(result["bandwidth_gbps"]),
+        flops=int(result.get("flops") or 0),
         tflops=float(result["tflops"]),
         speedup_vs_torch=None,
         noise_ratio=_ratio(float(result["p95_ms"]), float(result["p50_ms"])),
@@ -342,7 +363,9 @@ def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:
                 p50_ms=row.p50_ms,
                 p95_ms=row.p95_ms,
                 p99_ms=row.p99_ms,
+                bytes_moved=row.bytes_moved,
                 bandwidth_gbps=row.bandwidth_gbps,
+                flops=row.flops,
                 tflops=row.tflops,
                 speedup_vs_torch=speedup,
                 noise_ratio=row.noise_ratio,
@@ -393,6 +416,89 @@ def _optimization_technique_rows(rows: list[ReportRow]) -> list[str]:
             f"{_escape_cell(str(summary['hypothesis']))} |"
         )
     return lines
+
+
+def _roofline_summary_lines(rows: list[ReportRow]) -> list[str]:
+    spec = _roofline_spec_for_rows(rows)
+    if spec is None:
+        return []
+
+    candidates = [
+        row
+        for row in _fastest_rows(rows)
+        if row.bytes_moved > 0 and (row.flops > 0 or row.bandwidth_gbps > 0)
+    ]
+    if not candidates:
+        return []
+
+    lines = [
+        f"- Spec: `{spec.name}` ({spec.source}).",
+        f"- Peak HBM bandwidth: `{_fmt(spec.memory_bandwidth_gbps)} GB/s`.",
+        "",
+        "| Primitive | Operation | Dtype | Shape | Backend | Strategy | "
+        "Intensity FLOP/B | Achieved GB/s | HBM Peak % | Achieved TFLOP/s | "
+        "Math Peak % | Bound |",
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for row in sorted(candidates, key=lambda row: _roofline_sort_key(row, spec))[:12]:
+        lines.append(
+            "| "
+            f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
+            f"{row.backend} | {row.strategy} | "
+            f"{_fmt_optional(arithmetic_intensity(row.flops, row.bytes_moved))} | "
+            f"{_fmt(row.bandwidth_gbps)} | "
+            f"{_fmt_optional(_memory_peak_pct(row, spec))} | "
+            f"{_fmt(row.tflops)} | "
+            f"{_fmt_optional(_math_peak_pct(row, spec))} | "
+            f"{_roofline_bound_label(row, spec)} |"
+        )
+    return lines
+
+
+def _roofline_spec_for_rows(rows: list[ReportRow]) -> RooflineSpec | None:
+    first_run = rows[0].run
+    provider = first_run.get("provider")
+    if isinstance(provider, dict):
+        spec = spec_for_device_name(str(provider.get("gpu_id") or ""))
+        if spec is not None:
+            return spec
+
+    cuda_devices = first_run.get("cuda_devices")
+    if isinstance(cuda_devices, list):
+        for device in cuda_devices:
+            if isinstance(device, dict):
+                spec = spec_for_device_name(str(device.get("name") or ""))
+                if spec is not None:
+                    return spec
+    return None
+
+
+def _roofline_sort_key(row: ReportRow, spec: RooflineSpec) -> tuple[int, float]:
+    peak_pct = max(_math_peak_pct(row, spec) or 0.0, _memory_peak_pct(row, spec) or 0.0)
+    return (0 if row.primitive == "matmul" else 1, -peak_pct)
+
+
+def _memory_peak_pct(row: ReportRow, spec: RooflineSpec) -> float | None:
+    if spec.memory_bandwidth_gbps <= 0:
+        return None
+    return row.bandwidth_gbps / spec.memory_bandwidth_gbps * 100.0
+
+
+def _math_peak_pct(row: ReportRow, spec: RooflineSpec) -> float | None:
+    peak_tflops = spec.peak_tflops_for_dtype(row.dtype)
+    if peak_tflops is None or peak_tflops <= 0:
+        return None
+    return row.tflops / peak_tflops * 100.0
+
+
+def _roofline_bound_label(row: ReportRow, spec: RooflineSpec) -> str:
+    if row.flops <= 0:
+        return "memory"
+    intensity = arithmetic_intensity(row.flops, row.bytes_moved)
+    ridge_point = ridge_point_flops_per_byte(spec, row.dtype)
+    if intensity is None or ridge_point is None:
+        return ""
+    return "compute" if intensity >= ridge_point else "memory"
 
 
 def _technique_takeaway_lines(rows: list[ReportRow]) -> list[str]:

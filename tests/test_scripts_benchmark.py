@@ -66,6 +66,54 @@ def test_benchmark_dry_run_uses_runpod_connection(tmp_path: Path) -> None:
     assert "terraform -chdir" not in result.stdout
 
 
+def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> None:
+    connection_file = tmp_path / "runpod.env"
+    connection_file.write_text(
+        "\n".join(
+            [
+                "PROVIDER_PLATFORM=runpod",
+                "RUNPOD_POD_ID=pod123",
+                "RUNPOD_GPU_ID='NVIDIA H200'",
+                "KEY_FILE=/tmp/fake-runpod-key",
+                "SSH_USER=root",
+                "SSH_HOST=203.0.113.10",
+                "SSH_PORT=2222",
+                "REMOTE_DIR=cuda-kernel-lab",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/benchmark",
+            "--dry-run",
+            "--platform",
+            "runpod",
+            "--connection-file",
+            str(connection_file),
+            "--run-id",
+            "test-run",
+            "--suite",
+            "h200-roofline",
+            "--with-profiling",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert "Benchmark suite: h200-roofline" in result.stdout
+    assert (
+        "benchmark-matrix\\ --output-dir\\ experiments/results/runpod/test-run\\ "
+        "--suite\\ h200-roofline"
+    ) in result.stdout
+    assert "matmul-tensor-core-bfloat16" in result.stdout
+    assert "Profile summaries: profiling/reports/test-run" in result.stdout
+
+
 def test_benchmark_dry_run_preserves_aws_connection(tmp_path: Path) -> None:
     connection_file = tmp_path / "aws.env"
     connection_file.write_text(

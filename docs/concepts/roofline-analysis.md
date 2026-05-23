@@ -42,6 +42,14 @@ roofline result, keep these fields together:
 - estimated FLOPs and effective TFLOP/s
 - command and run metadata when the result is worth keeping
 
+`benchmark-report` emits a roofline section automatically when it recognizes
+the GPU peak spec from provider metadata or CUDA device metadata. The current
+named suite for this path is:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
 For FP16/BF16 normalization runs, include the epsilon value and correctness
 tolerance in the report. Normalization kernels can look fast while still being
 numerically wrong if accumulation dtype and epsilon handling are not explicit.

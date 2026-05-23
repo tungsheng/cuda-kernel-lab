@@ -49,6 +49,14 @@ Run more benchmark experiments without another Pod create/delete cycle:
 ./scripts/benchmark --run-id <second-run-id> --include-matmul-sweep
 ```
 
+For the H200 Tensor Core/roofline path, launch an H200 Pod and run the named
+suite with profiling:
+
+```bash
+./scripts/up --gpu-id "NVIDIA H200"
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:
 

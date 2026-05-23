@@ -204,6 +204,73 @@ def test_render_markdown_includes_dynamic_trace_detail(tmp_path: Path) -> None:
     assert "| dynamic-piecewise-graph-same-stream | 1,2,4,8 | 7 | input_copy_host_ms |" in report
 
 
+def test_render_markdown_includes_h200_roofline_summary(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "matmul-tensor-core.jsonl",
+        [
+            _record(
+                benchmark="matmul",
+                name="torch:matmul",
+                dtype="bfloat16",
+                shape=(4096, 4096, 4096),
+                p50=1.2,
+                p95=1.3,
+                p99=1.4,
+                bytes_moved=100_663_296,
+                gbps=83.9,
+                flops=137_438_953_472,
+                tflops=114.5,
+                args={
+                    "block_m": 128,
+                    "block_n": 128,
+                    "block_k": 64,
+                    "num_warps": 4,
+                    "num_stages": 4,
+                    "input_precision": "tf32",
+                    "warmup": 25,
+                    "iterations": 100,
+                },
+                provider={"name": "runpod", "gpu_id": "NVIDIA H200"},
+                cuda_device_name="NVIDIA H200",
+            ),
+            _record(
+                benchmark="matmul",
+                name="triton:matmul",
+                dtype="bfloat16",
+                shape=(4096, 4096, 4096),
+                p50=1.0,
+                p95=1.1,
+                p99=1.2,
+                bytes_moved=100_663_296,
+                gbps=100.7,
+                flops=137_438_953_472,
+                tflops=137.4,
+                args={
+                    "block_m": 128,
+                    "block_n": 128,
+                    "block_k": 64,
+                    "num_warps": 4,
+                    "num_stages": 4,
+                    "input_precision": "tf32",
+                    "warmup": 25,
+                    "iterations": 100,
+                },
+                provider={"name": "runpod", "gpu_id": "NVIDIA H200"},
+                cuda_device_name="NVIDIA H200",
+            ),
+        ],
+    )
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+    report = benchmark_report.render_markdown(rows, input_dir=tmp_path)
+
+    assert "## Roofline Summary" in report
+    assert "- Spec: `NVIDIA H200 SXM`" in report
+    assert "- Peak HBM bandwidth: `4800 GB/s`." in report
+    assert "| matmul | matmul | bfloat16 | 4096x4096x4096 | triton |" in report
+    assert "| 1365 | 100.7 | 2.098 | 137.4 | 6.943 | compute |" in report
+
+
 def test_render_markdown_rejects_empty_input(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no benchmark JSONL records"):
         benchmark_report.render_markdown([], input_dir=tmp_path)
@@ -279,29 +346,39 @@ def _record(
     p99: float,
     gbps: float,
     shape: tuple[int, ...] = (16_777_216,),
+    bytes_moved: int = 1,
+    flops: int = 1,
     tflops: float = 0.0,
     args: dict[str, object] | None = None,
     metrics: dict[str, object] | None = None,
+    provider: dict[str, object] | None = None,
+    cuda_device_name: str = "NVIDIA A10G",
 ) -> dict[str, object]:
+    run: dict[str, object] = {
+        "benchmark": benchmark,
+        "args": _args_for(benchmark) if args is None else args,
+        "command": "uv run benchmark",
+        "timestamp_utc": "2026-05-19T00:00:00+00:00",
+        "git_commit": "abc123",
+        "git_dirty": False,
+        "host": {"python": "3.13.2", "platform": "Linux"},
+        "packages": {"torch": "2.3.0", "triton": "2.3.0"},
+        "cuda_devices": [
+            {
+                "index": 0,
+                "name": cuda_device_name,
+                "capability": [8, 6],
+                "total_memory_bytes": 24_000_000_000,
+                "multiprocessor_count": 80,
+            }
+        ],
+    }
+    if provider is not None:
+        run["provider"] = provider
+
     return {
         "run": {
-            "benchmark": benchmark,
-            "args": _args_for(benchmark) if args is None else args,
-            "command": "uv run benchmark",
-            "timestamp_utc": "2026-05-19T00:00:00+00:00",
-            "git_commit": "abc123",
-            "git_dirty": False,
-            "host": {"python": "3.13.2", "platform": "Linux"},
-            "packages": {"torch": "2.3.0", "triton": "2.3.0"},
-            "cuda_devices": [
-                {
-                    "index": 0,
-                    "name": "NVIDIA A10G",
-                    "capability": [8, 6],
-                    "total_memory_bytes": 24_000_000_000,
-                    "multiprocessor_count": 80,
-                }
-            ],
+            **run,
         },
         "result": {
             "name": name,
@@ -311,9 +388,9 @@ def _record(
             "p50_ms": p50,
             "p95_ms": p95,
             "p99_ms": p99,
-            "bytes_moved": 1,
+            "bytes_moved": bytes_moved,
             "bandwidth_gbps": gbps,
-            "flops": 1,
+            "flops": flops,
             "tflops": tflops,
             "latencies_ms": [p50, p95, p99],
             "strategy": _strategy_for(name),

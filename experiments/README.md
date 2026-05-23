@@ -36,6 +36,12 @@ For the matmul/Tensor Core track, include the focused tile-shape sweep:
 ./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
+For the H200 Tensor Core/roofline track, use the named suite:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
 For the current decode-step graph track, keep the note focused on resident
 head-major KV cache, same-stream piecewise graph replay, and multi-seed tail
 latency:

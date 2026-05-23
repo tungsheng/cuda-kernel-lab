@@ -75,6 +75,7 @@ if [[ -n "${AWS_PROFILE:-}" ]]; then
   AWS_PROFILE_ENV_SET=1
 fi
 RUN_ID=""
+SUITE="standard"
 KEY_FILE=""
 SSH_USER=""
 SSH_PORT="22"
@@ -141,6 +142,8 @@ experiments.
 
 Options:
   --platform <name>         Provider platform: runpod or aws. Default: ${PLATFORM}
+  --suite <name>            Benchmark suite: standard, h200-roofline, or tensor-core.
+                            Default: ${SUITE}
   --run-id <id>             Result run id. Default: UTC timestamp.
   --key-file <path>         SSH private key. Default: connection metadata.
   --profile <name>          AWS CLI profile used by Terraform output reads.
@@ -218,6 +221,15 @@ parse_args() {
       --platform=*)
         PLATFORM=${1#*=}
         PLATFORM_SET=1
+        shift
+        ;;
+      --suite)
+        require_value "$1" "${2:-}"
+        SUITE=${2:-}
+        shift 2
+        ;;
+      --suite=*)
+        SUITE=${1#*=}
         shift
         ;;
       --key-file)
@@ -368,6 +380,16 @@ validate_platform() {
       ;;
     *)
       die "--platform must be one of: runpod, aws"
+      ;;
+  esac
+}
+
+validate_suite() {
+  case "${SUITE}" in
+    standard|h200-roofline|tensor-core)
+      ;;
+    *)
+      die "--suite must be one of: standard, h200-roofline, tensor-core"
       ;;
   esac
 }
@@ -585,6 +607,7 @@ resolve_defaults() {
 }
 
 validate_inputs() {
+  validate_suite
   if [[ "${PLATFORM}" == "aws" ]]; then
     [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
   fi
@@ -694,6 +717,9 @@ remote_benchmark_command() {
     command+=" && export CUDA_KERNEL_LAB_PROVIDER_ID=$(shell_quote "${INSTANCE_ID}")"
   fi
   command+=" && uv run benchmark-matrix --output-dir ${RESULT_DIR}"
+  if [[ "${SUITE}" != "standard" ]]; then
+    command+=" --suite ${SUITE}"
+  fi
   if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
     command+=" --only-decode-step"
   else
@@ -770,6 +796,14 @@ profile_benchmark_command() {
       printf '%s\n' \
         "uv run benchmark-matmul --backend triton --device cuda --m 1024 --n 1024 --k 1024 --dtype float16 --block-m 64 --block-n 64 --block-k 32 --num-warps 4 --num-stages 3 --input-precision tf32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tiled-float16.jsonl"
       ;;
+    matmul-tensor-core-float16)
+      printf '%s\n' \
+        "uv run benchmark-matmul --backend triton --device cuda --m 4096 --n 4096 --k 4096 --dtype float16 --block-m 128 --block-n 128 --block-k 64 --num-warps 4 --num-stages 4 --input-precision tf32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tensor-core-float16.jsonl"
+      ;;
+    matmul-tensor-core-bfloat16)
+      printf '%s\n' \
+        "uv run benchmark-matmul --backend triton --device cuda --m 4096 --n 4096 --k 4096 --dtype bfloat16 --block-m 128 --block-n 128 --block-k 64 --num-warps 4 --num-stages 4 --input-precision tf32 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/matmul-tensor-core-bfloat16.jsonl"
+      ;;
     decode-step-naive-eager-float16)
       printf '%s\n' \
         "uv run benchmark-decode-step --mode naive-eager --device cuda --dtype float16 --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/decode-step-naive-eager-float16.jsonl"
@@ -831,6 +865,12 @@ profile_title() {
     matmul-tiled-float16)
       printf '%s\n' "${PROFILE_DEVICE_LABEL} matmul float16 tiled-dot profile"
       ;;
+    matmul-tensor-core-float16)
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} matmul float16 Tensor Core roofline profile"
+      ;;
+    matmul-tensor-core-bfloat16)
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} matmul bfloat16 Tensor Core roofline profile"
+      ;;
     decode-step-naive-eager-float16)
       printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step naive eager float16 profile"
       ;;
@@ -877,7 +917,7 @@ profile_operation() {
     norms-rmsnorm-float16)
       printf '%s\n' "rmsnorm"
       ;;
-    matmul-tiled-float16)
+    matmul-tiled-float16|matmul-tensor-core-float16|matmul-tensor-core-bfloat16)
       printf '%s\n' "matmul"
       ;;
     decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16|decode-step-fused-piecewise-graph-same-stream-float16|decode-step-dynamic-eager-float16|decode-step-dynamic-piecewise-graph-float16|decode-step-dynamic-piecewise-graph-same-stream-float16)
@@ -907,6 +947,9 @@ profile_strategy() {
       ;;
     matmul-tiled-float16)
       printf '%s\n' "triton-tiled-dot-block-64x64x32-warps-4-stages-3"
+      ;;
+    matmul-tensor-core-float16|matmul-tensor-core-bfloat16)
+      printf '%s\n' "triton-tiled-dot-block-128x128x64-warps-4-stages-4"
       ;;
     decode-step-naive-eager-float16)
       printf '%s\n' "naive-eager"
@@ -948,7 +991,7 @@ profile_launch_skip() {
     memory-reduction-two-pass-float32)
       printf '%s\n' "10"
       ;;
-    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16|decode-step-fused-piecewise-graph-same-stream-float16|decode-step-dynamic-eager-float16|decode-step-dynamic-piecewise-graph-float16|decode-step-dynamic-piecewise-graph-same-stream-float16)
+    memory-vector-add-float32|memory-reduction-iterative-float32|norms-rmsnorm-float16|matmul-tiled-float16|matmul-tensor-core-float16|matmul-tensor-core-bfloat16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16|decode-step-fused-piecewise-graph-same-stream-float16|decode-step-dynamic-eager-float16|decode-step-dynamic-piecewise-graph-float16|decode-step-dynamic-piecewise-graph-same-stream-float16)
       printf '%s\n' "5"
       ;;
     *)
@@ -1043,6 +1086,12 @@ remote_profile_command() {
       norms-rmsnorm-float16
       matmul-tiled-float16
     )
+    if [[ "${SUITE}" == "h200-roofline" || "${SUITE}" == "tensor-core" ]]; then
+      targets+=(
+        matmul-tensor-core-float16
+        matmul-tensor-core-bfloat16
+      )
+    fi
   fi
   if [[ "${INCLUDE_DECODE_STEP}" == "1" || "${ONLY_DECODE_STEP}" == "1" ]]; then
     targets+=(
@@ -1115,6 +1164,9 @@ print_plan() {
   printf '  Remote repo: ~/%s\n' "${REMOTE_DIR}"
   printf '  Raw results: %s\n' "${RESULT_DIR}"
   printf '  Report: %s\n' "${REPORT_PATH}"
+  if [[ "${SUITE}" != "standard" ]]; then
+    printf '  Benchmark suite: %s\n' "${SUITE}"
+  fi
   if [[ "${INCLUDE_MATMUL_SWEEP}" == "1" ]]; then
     printf '  Matmul sweep: enabled\n'
   elif [[ "${INCLUDE_MATMUL}" == "1" ]]; then

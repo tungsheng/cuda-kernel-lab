@@ -213,6 +213,23 @@ When running the matrix manually, pass
 plus any focused optional baselines, and the same
 `--output-dir experiments/results/runpod/<run-id>`.
 
+Use the named H200 roofline suite when the experiment should focus on Tensor
+Core matmul, BF16/FP16 comparison, RMSNorm shape scaling, attention baseline
+context, and profiler-backed roofline interpretation:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
+The same suite is available without SSH orchestration:
+
+```bash
+uv run benchmark-matrix \
+  --suite h200-roofline \
+  --output-dir experiments/results/runpod/<run-id>
+uv run benchmark-report --input-dir experiments/results/runpod/<run-id>
+```
+
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
 runs, `512` and `2048`, to the run's `vector-add-block-size.jsonl`. It also

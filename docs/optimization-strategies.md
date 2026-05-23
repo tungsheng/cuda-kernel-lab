@@ -98,6 +98,12 @@ Recommended live command:
 ./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
+Recommended H200 roofline command:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
 ## Attention Baseline Track
 
 Use `attention` to bridge from dense matmul reuse into KV-cache dominated decode
