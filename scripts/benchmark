@@ -61,8 +61,11 @@ absolute_path() {
   fi
 }
 
-STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}")
-CONNECTION_FILE=$(absolute_path "${CUDA_KERNEL_LAB_CONNECTION_FILE:-${STATE_DIR}/connection.env}")
+PLATFORM="${CUDA_KERNEL_LAB_PLATFORM:-runpod}"
+AWS_STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}")
+RUNPOD_STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_RUNPOD_STATE_DIR:-${REPO_ROOT}/.runpod}")
+STATE_DIR=""
+CONNECTION_FILE="${CUDA_KERNEL_LAB_CONNECTION_FILE:-}"
 TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
 TF_VARS_FILE="${CUDA_KERNEL_LAB_TF_VARS_FILE:-}"
 
@@ -73,10 +76,11 @@ if [[ -n "${AWS_PROFILE:-}" ]]; then
 fi
 RUN_ID=""
 KEY_FILE=""
-SSH_USER="ubuntu"
+SSH_USER=""
+SSH_PORT="22"
 REMOTE_DIR="cuda-kernel-lab"
-OUTPUT_ROOT="experiments/results/aws-ec2"
-REPORT_ROOT="experiments/reports/aws-ec2"
+OUTPUT_ROOT=""
+REPORT_ROOT=""
 INCLUDE_MATMUL=0
 INCLUDE_MATMUL_SWEEP=0
 INCLUDE_RMSNORM_SHAPE_SWEEP=0
@@ -97,7 +101,12 @@ DRY_RUN=0
 
 KEY_FILE_SET=0
 SSH_USER_SET=0
+SSH_PORT_SET=0
 REMOTE_DIR_SET=0
+CONNECTION_FILE_SET=0
+OUTPUT_ROOT_SET=0
+REPORT_ROOT_SET=0
+PLATFORM_SET=0
 TF_DIR_SET=0
 TF_VARS_FILE_SET=0
 AWS_PROFILE_SET=0
@@ -111,6 +120,13 @@ GIT_COMMIT=""
 GIT_DIRTY="unknown"
 SSH_HOST=""
 INSTANCE_ID=""
+RUNPOD_POD_ID=""
+RUNPOD_GPU_ID=""
+RUNPOD_CLOUD_TYPE=""
+RUNPOD_IMAGE=""
+RUNPOD_TEMPLATE_ID=""
+RUNPOD_DATA_CENTER_IDS=""
+PROFILE_DEVICE_LABEL="GPU"
 
 ssh_base_args=()
 
@@ -124,8 +140,9 @@ results and Markdown reports back locally, and leaves the host running for more
 experiments.
 
 Options:
+  --platform <name>         Provider platform: runpod or aws. Default: ${PLATFORM}
   --run-id <id>             Result run id. Default: UTC timestamp.
-  --key-file <path>         SSH private key. Default: .aws-gpu/connection.env.
+  --key-file <path>         SSH private key. Default: connection metadata.
   --profile <name>          AWS CLI profile used by Terraform output reads.
   --include-matmul          Include the tiled matmul progression in the matrix.
   --include-matmul-sweep    Include the float16 matmul tile and launch strategy sweep.
@@ -159,14 +176,15 @@ Options:
                             Dynamic decode-step orchestration timing: on or off.
                             Default: benchmark-matrix default.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
-  --output-root <path>      Raw JSONL root. Default: ${OUTPUT_ROOT}
-  --report-root <path>      Markdown report root. Default: ${REPORT_ROOT}
+  --output-root <path>      Raw JSONL root. Default: provider-specific.
+  --report-root <path>      Markdown report root. Default: provider-specific.
   --ssh-user <name>         SSH user. Default: ${SSH_USER}
+  --ssh-port <port>         SSH port. Default: connection metadata or 22.
   --remote-dir <path>       Remote repo directory. Default: ${REMOTE_DIR}
   --tf-dir <path>           Terraform environment. Default: ${TF_DIR}
   --tf-vars-file <path>     Terraform variable file label from ./scripts/up.
   --connection-file <path>  Connection metadata file. Default: ${CONNECTION_FILE}
-  --dry-run                 Print the planned benchmark without SSH or Terraform.
+  --dry-run                 Print the planned benchmark without SSH or provider calls.
 
 Examples:
   ./scripts/up
@@ -174,6 +192,7 @@ Examples:
   ./scripts/benchmark --run-id 2026-05-21-a10g-decode --only-decode-step
   ./scripts/benchmark --run-id 2026-05-21-a10g-profile --with-profiling
   ./scripts/benchmark --run-id 2026-05-21-a10g-matmul --include-matmul-sweep
+  ./scripts/benchmark --platform aws --run-id 2026-05-21-a10g-baseline
   ./scripts/down
 EOF
 }
@@ -189,6 +208,17 @@ parse_args() {
         require_value "$1" "${2:-}"
         RUN_ID=${2:-}
         shift 2
+        ;;
+      --platform)
+        require_value "$1" "${2:-}"
+        PLATFORM=${2:-}
+        PLATFORM_SET=1
+        shift 2
+        ;;
+      --platform=*)
+        PLATFORM=${1#*=}
+        PLATFORM_SET=1
+        shift
         ;;
       --key-file)
         require_value "$1" "${2:-}"
@@ -276,17 +306,25 @@ parse_args() {
       --output-root)
         require_value "$1" "${2:-}"
         OUTPUT_ROOT=${2:-}
+        OUTPUT_ROOT_SET=1
         shift 2
         ;;
       --report-root)
         require_value "$1" "${2:-}"
         REPORT_ROOT=${2:-}
+        REPORT_ROOT_SET=1
         shift 2
         ;;
       --ssh-user)
         require_value "$1" "${2:-}"
         SSH_USER=${2:-}
         SSH_USER_SET=1
+        shift 2
+        ;;
+      --ssh-port)
+        require_value "$1" "${2:-}"
+        SSH_PORT=${2:-}
+        SSH_PORT_SET=1
         shift 2
         ;;
       --remote-dir)
@@ -310,6 +348,7 @@ parse_args() {
       --connection-file)
         require_value "$1" "${2:-}"
         CONNECTION_FILE=$(absolute_path "${2:-}")
+        CONNECTION_FILE_SET=1
         shift 2
         ;;
       --dry-run)
@@ -323,11 +362,76 @@ parse_args() {
   done
 }
 
+validate_platform() {
+  case "${PLATFORM}" in
+    runpod|aws)
+      ;;
+    *)
+      die "--platform must be one of: runpod, aws"
+      ;;
+  esac
+}
+
+resolve_connection_default() {
+  validate_platform
+
+  if [[ "${CONNECTION_FILE_SET}" == "0" && -z "${CONNECTION_FILE}" ]]; then
+    if [[ "${PLATFORM}" == "runpod" ]]; then
+      STATE_DIR="${RUNPOD_STATE_DIR}"
+    else
+      STATE_DIR="${AWS_STATE_DIR}"
+    fi
+    CONNECTION_FILE="${STATE_DIR}/connection.env"
+    return
+  fi
+
+  CONNECTION_FILE=$(absolute_path "${CONNECTION_FILE}")
+  STATE_DIR=$(absolute_path "$(dirname "${CONNECTION_FILE}")")
+}
+
+resolve_provider_defaults() {
+  validate_platform
+
+  if [[ -z "${SSH_USER}" ]]; then
+    if [[ "${PLATFORM}" == "runpod" ]]; then
+      SSH_USER="root"
+    else
+      SSH_USER="ubuntu"
+    fi
+  fi
+
+  if [[ "${OUTPUT_ROOT_SET}" == "0" && -z "${OUTPUT_ROOT}" ]]; then
+    if [[ "${PLATFORM}" == "runpod" ]]; then
+      OUTPUT_ROOT="experiments/results/runpod"
+    else
+      OUTPUT_ROOT="experiments/results/aws-ec2"
+    fi
+  fi
+
+  if [[ "${REPORT_ROOT_SET}" == "0" && -z "${REPORT_ROOT}" ]]; then
+    if [[ "${PLATFORM}" == "runpod" ]]; then
+      REPORT_ROOT="experiments/reports/runpod"
+    else
+      REPORT_ROOT="experiments/reports/aws-ec2"
+    fi
+  fi
+
+  if [[ "${PLATFORM}" == "runpod" ]]; then
+    PROFILE_DEVICE_LABEL="${RUNPOD_GPU_ID:-GPU}"
+  elif [[ -n "${INSTANCE_ID}" ]]; then
+    PROFILE_DEVICE_LABEL="${INSTANCE_ID}"
+  else
+    PROFILE_DEVICE_LABEL="GPU"
+  fi
+}
+
 load_connection_metadata() {
+  local cli_platform=${PLATFORM}
   local cli_aws_profile_name=${AWS_PROFILE_NAME}
   local cli_key_file=${KEY_FILE}
   local cli_remote_dir=${REMOTE_DIR}
   local cli_ssh_user=${SSH_USER}
+  local cli_ssh_port=${SSH_PORT}
   local cli_tf_dir=${TF_DIR}
   local cli_tf_vars_file=${TF_VARS_FILE}
 
@@ -336,11 +440,19 @@ load_connection_metadata() {
     source "${CONNECTION_FILE}"
   fi
 
+  if [[ "${PLATFORM_SET}" == "1" ]]; then
+    PLATFORM=${cli_platform}
+  elif [[ -n "${PROVIDER_PLATFORM:-}" ]]; then
+    PLATFORM=${PROVIDER_PLATFORM}
+  fi
   if [[ "${KEY_FILE_SET}" == "1" ]]; then
     KEY_FILE=${cli_key_file}
   fi
   if [[ "${SSH_USER_SET}" == "1" ]]; then
     SSH_USER=${cli_ssh_user}
+  fi
+  if [[ "${SSH_PORT_SET}" == "1" ]]; then
+    SSH_PORT=${cli_ssh_port}
   fi
   if [[ "${REMOTE_DIR_SET}" == "1" ]]; then
     REMOTE_DIR=${cli_remote_dir}
@@ -473,8 +585,11 @@ resolve_defaults() {
 }
 
 validate_inputs() {
-  [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
+  if [[ "${PLATFORM}" == "aws" ]]; then
+    [[ -d "${TF_DIR}" ]] || die "Terraform directory does not exist: ${TF_DIR}"
+  fi
   [[ "${SSH_USER}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] || die "--ssh-user contains unsafe characters"
+  [[ "${SSH_PORT}" =~ ^[0-9]+$ ]] || die "--ssh-port must be an integer"
   validate_relative_path "--remote-dir" "${REMOTE_DIR}"
   validate_relative_path "--output-root" "${OUTPUT_ROOT}"
   validate_relative_path "--report-root" "${REPORT_ROOT}"
@@ -524,6 +639,12 @@ collect_source_metadata() {
 }
 
 load_outputs() {
+  if [[ "${PLATFORM}" == "runpod" ]]; then
+    [[ -n "${SSH_HOST}" ]] || die "missing SSH_HOST in Runpod connection metadata; run ./scripts/up first"
+    INSTANCE_ID="${RUNPOD_POD_ID:-}"
+    return
+  fi
+
   if ! SSH_HOST=$(terraform -chdir="${TF_DIR}" output -raw ssh_host 2>/dev/null); then
     die "could not read Terraform ssh_host output; run ./scripts/up first"
   fi
@@ -549,6 +670,29 @@ remote_benchmark_command() {
     command+=" && export CUDA_KERNEL_LAB_GIT_COMMIT=${GIT_COMMIT}"
   fi
   command+=" && export CUDA_KERNEL_LAB_GIT_DIRTY=${GIT_DIRTY}"
+  command+=" && export CUDA_KERNEL_LAB_PROVIDER=${PLATFORM}"
+  if [[ "${PLATFORM}" == "runpod" ]]; then
+    if [[ -n "${RUNPOD_POD_ID}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_ID=$(shell_quote "${RUNPOD_POD_ID}")"
+    fi
+    if [[ -n "${RUNPOD_GPU_ID}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_GPU_ID=$(shell_quote "${RUNPOD_GPU_ID}")"
+    fi
+    if [[ -n "${RUNPOD_CLOUD_TYPE}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_CLOUD_TYPE=$(shell_quote "${RUNPOD_CLOUD_TYPE}")"
+    fi
+    if [[ -n "${RUNPOD_IMAGE}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_IMAGE=$(shell_quote "${RUNPOD_IMAGE}")"
+    fi
+    if [[ -n "${RUNPOD_TEMPLATE_ID}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_TEMPLATE_ID=$(shell_quote "${RUNPOD_TEMPLATE_ID}")"
+    fi
+    if [[ -n "${RUNPOD_DATA_CENTER_IDS}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_REGION=$(shell_quote "${RUNPOD_DATA_CENTER_IDS}")"
+    fi
+  elif [[ -n "${INSTANCE_ID}" ]]; then
+    command+=" && export CUDA_KERNEL_LAB_PROVIDER_ID=$(shell_quote "${INSTANCE_ID}")"
+  fi
   command+=" && uv run benchmark-matrix --output-dir ${RESULT_DIR}"
   if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
     command+=" --only-decode-step"
@@ -673,46 +817,46 @@ profile_title() {
 
   case "${target}" in
     memory-vector-add-float32)
-      printf '%s\n' "A10G vector_add float32 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} vector_add float32 profile"
       ;;
     memory-reduction-iterative-float32)
-      printf '%s\n' "A10G reduction_sum iterative float32 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} reduction_sum iterative float32 profile"
       ;;
     memory-reduction-two-pass-float32)
-      printf '%s\n' "A10G reduction_sum two-pass float32 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} reduction_sum two-pass float32 profile"
       ;;
     norms-rmsnorm-float16)
-      printf '%s\n' "A10G RMSNorm float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} RMSNorm float16 profile"
       ;;
     matmul-tiled-float16)
-      printf '%s\n' "A10G matmul float16 tiled-dot profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} matmul float16 tiled-dot profile"
       ;;
     decode-step-naive-eager-float16)
-      printf '%s\n' "A10G decode step naive eager float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step naive eager float16 profile"
       ;;
     decode-step-fused-eager-float16)
-      printf '%s\n' "A10G decode step fused eager float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step fused eager float16 profile"
       ;;
     decode-step-naive-graph-float16)
-      printf '%s\n' "A10G decode step naive CUDA Graph float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step naive CUDA Graph float16 profile"
       ;;
     decode-step-fused-graph-float16)
-      printf '%s\n' "A10G decode step fused CUDA Graph float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step fused CUDA Graph float16 profile"
       ;;
     decode-step-fused-piecewise-graph-float16)
-      printf '%s\n' "A10G decode step fused piecewise CUDA Graph float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step fused piecewise CUDA Graph float16 profile"
       ;;
     decode-step-fused-piecewise-graph-same-stream-float16)
-      printf '%s\n' "A10G decode step fused same-stream piecewise CUDA Graph float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} decode step fused same-stream piecewise CUDA Graph float16 profile"
       ;;
     decode-step-dynamic-eager-float16)
-      printf '%s\n' "A10G dynamic decode step eager float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} dynamic decode step eager float16 profile"
       ;;
     decode-step-dynamic-piecewise-graph-float16)
-      printf '%s\n' "A10G dynamic decode step piecewise CUDA Graph float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} dynamic decode step piecewise CUDA Graph float16 profile"
       ;;
     decode-step-dynamic-piecewise-graph-same-stream-float16)
-      printf '%s\n' "A10G dynamic decode step same-stream piecewise CUDA Graph float16 profile"
+      printf '%s\n' "${PROFILE_DEVICE_LABEL} dynamic decode step same-stream piecewise CUDA Graph float16 profile"
       ;;
     *)
       die "unknown profile target: ${target}"
@@ -845,7 +989,7 @@ profile_case_command() {
   printf -v quoted_title '%q' "${title}"
 
   printf '%s' "printf '\\n==> profiling ${target}\\n'"
-  printf '%s' " && if ( sudo -n env HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" --set full --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv --page raw bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2> ${stderr_path} || sudo -n env HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" --set full --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2>> ${stderr_path} ); then"
+  printf '%s' " && if ( \${ncu_runner} \"\${ncu_bin}\" --set full --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv --page raw bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2> ${stderr_path} || \${ncu_runner} \"\${ncu_bin}\" --set full --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2>> ${stderr_path} ); then"
   printf '%s' " uv run nsight-summary --input ${csv_path} --output ${report_path} --title ${quoted_title} --benchmark-command ${quoted_benchmark_cmd} --result-jsonl ${PROFILE_RESULT_DIR}/${target}.jsonl --operation ${operation} --strategy ${strategy};"
   printf '%s' " else printf '# %s\\n\\nStatus: profile command failed\\n\\n- Nsight CSV: \`%s\`\\n- Nsight stderr: \`%s\`\\n- Benchmark log: \`%s\`\\n' ${quoted_title} ${csv_path} ${stderr_path} ${benchmark_log} > ${report_path}; cat ${stderr_path} >&2; false; fi"
 }
@@ -861,11 +1005,34 @@ remote_profile_command() {
     command+=" && export CUDA_KERNEL_LAB_GIT_COMMIT=${GIT_COMMIT}"
   fi
   command+=" && export CUDA_KERNEL_LAB_GIT_DIRTY=${GIT_DIRTY}"
+  command+=" && export CUDA_KERNEL_LAB_PROVIDER=${PLATFORM}"
+  if [[ "${PLATFORM}" == "runpod" ]]; then
+    if [[ -n "${RUNPOD_POD_ID}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_ID=$(shell_quote "${RUNPOD_POD_ID}")"
+    fi
+    if [[ -n "${RUNPOD_GPU_ID}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_GPU_ID=$(shell_quote "${RUNPOD_GPU_ID}")"
+    fi
+    if [[ -n "${RUNPOD_CLOUD_TYPE}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_CLOUD_TYPE=$(shell_quote "${RUNPOD_CLOUD_TYPE}")"
+    fi
+    if [[ -n "${RUNPOD_IMAGE}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_IMAGE=$(shell_quote "${RUNPOD_IMAGE}")"
+    fi
+    if [[ -n "${RUNPOD_TEMPLATE_ID}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_TEMPLATE_ID=$(shell_quote "${RUNPOD_TEMPLATE_ID}")"
+    fi
+    if [[ -n "${RUNPOD_DATA_CENTER_IDS}" ]]; then
+      command+=" && export CUDA_KERNEL_LAB_PROVIDER_REGION=$(shell_quote "${RUNPOD_DATA_CENTER_IDS}")"
+    fi
+  elif [[ -n "${INSTANCE_ID}" ]]; then
+    command+=" && export CUDA_KERNEL_LAB_PROVIDER_ID=$(shell_quote "${INSTANCE_ID}")"
+  fi
   command+=" && mkdir -p ${PROFILE_RESULT_DIR} ${PROFILE_EXPORT_DIR} ${PROFILE_REPORT_DIR}"
   command+=" && profile_status=0"
   command+=" && ncu_bin=\$(command -v ncu || true)"
   command+="; if [ -z \"\${ncu_bin}\" ]; then printf '# Nsight Compute Profile\\n\\nStatus: ncu was not found on the remote host.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
-  command+="; if ! sudo -n true >/dev/null 2>&1; then printf '# Nsight Compute Profile\\n\\nStatus: passwordless sudo is required to access NVIDIA performance counters.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
+  command+="; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then ncu_runner='sudo -n env HOME=\"\$HOME\" PATH=\"\$PATH\"'; elif [ \"\$(id -u)\" = '0' ]; then ncu_runner='env HOME=\"\$HOME\" PATH=\"\$PATH\"'; else printf '# Nsight Compute Profile\\n\\nStatus: passwordless sudo or root is required to access NVIDIA performance counters.\\n' > ${PROFILE_REPORT_DIR}/profile-error.md; exit 1; fi"
 
   targets=()
   if [[ "${ONLY_DECODE_STEP}" != "1" ]]; then
@@ -902,19 +1069,40 @@ remote_profile_command() {
 print_plan() {
   local plan_ssh_host
 
-  plan_ssh_host="${SSH_HOST:-<terraform ssh_host>}"
+  if [[ "${PLATFORM}" == "aws" ]]; then
+    plan_ssh_host="${SSH_HOST:-<terraform ssh_host>}"
+  else
+    plan_ssh_host="${SSH_HOST:-<runpod ssh_host>}"
+  fi
   if [[ "${DRY_RUN}" == "1" ]]; then
-    plan_ssh_host="<terraform ssh_host>"
+    if [[ "${PLATFORM}" == "aws" ]]; then
+      plan_ssh_host="<terraform ssh_host>"
+    else
+      plan_ssh_host="${SSH_HOST:-<runpod ssh_host>}"
+    fi
   fi
 
   printf '\nBenchmark plan:\n'
   if [[ "${DRY_RUN}" == "1" ]]; then
-    printf '  Mode: dry run; no SSH or Terraform commands will run\n'
+    printf '  Mode: dry run; no SSH or provider commands will run\n'
   fi
+  printf '  Platform: %s\n' "${PLATFORM}"
   printf '  Run id: %s\n' "${RUN_ID}"
-  printf '  Terraform: %s\n' "${TF_DIR}"
-  if [[ -n "${TF_VARS_FILE}" ]]; then
-    printf '  Terraform variables: %s\n' "${TF_VARS_FILE}"
+  if [[ "${PLATFORM}" == "aws" ]]; then
+    printf '  Terraform: %s\n' "${TF_DIR}"
+    if [[ -n "${TF_VARS_FILE}" ]]; then
+      printf '  Terraform variables: %s\n' "${TF_VARS_FILE}"
+    fi
+  else
+    if [[ -n "${RUNPOD_POD_ID}" ]]; then
+      printf '  Runpod pod: %s\n' "${RUNPOD_POD_ID}"
+    fi
+    if [[ -n "${RUNPOD_GPU_ID}" ]]; then
+      printf '  Runpod GPU: %s\n' "${RUNPOD_GPU_ID}"
+    fi
+    if [[ -n "${RUNPOD_CLOUD_TYPE}" ]]; then
+      printf '  Runpod cloud: %s\n' "${RUNPOD_CLOUD_TYPE}"
+    fi
   fi
   if [[ -f "${CONNECTION_FILE}" ]]; then
     printf '  Connection metadata: %s\n' "${CONNECTION_FILE}"
@@ -922,7 +1110,7 @@ print_plan() {
   if [[ -n "${AWS_PROFILE_NAME}" ]]; then
     printf '  AWS profile: %s\n' "${AWS_PROFILE_NAME}"
   fi
-  printf '  SSH: %s@%s\n' "${SSH_USER}" "${plan_ssh_host}"
+  printf '  SSH: %s@%s:%s\n' "${SSH_USER}" "${plan_ssh_host}" "${SSH_PORT}"
   printf '  SSH key file: %s\n' "${KEY_FILE}"
   printf '  Remote repo: ~/%s\n' "${REMOTE_DIR}"
   printf '  Raw results: %s\n' "${RESULT_DIR}"
@@ -981,10 +1169,12 @@ print_plan() {
 
   if [[ "${DRY_RUN}" == "1" ]]; then
     printf '\nCommands:\n'
-    print_command terraform -chdir="${TF_DIR}" output -raw ssh_host
-    printf '  ssh %s@<host> %q\n' "${SSH_USER}" "$(remote_benchmark_command)"
+    if [[ "${PLATFORM}" == "aws" ]]; then
+      print_command terraform -chdir="${TF_DIR}" output -raw ssh_host
+    fi
+    printf '  ssh -p %s %s@%s %q\n' "${SSH_PORT}" "${SSH_USER}" "${plan_ssh_host}" "$(remote_benchmark_command)"
     if [[ "${PROFILE}" == "1" ]]; then
-      printf '  ssh %s@<host> %q\n' "${SSH_USER}" "$(remote_profile_command)"
+      printf '  ssh -p %s %s@%s %q\n' "${SSH_PORT}" "${SSH_USER}" "${plan_ssh_host}" "$(remote_profile_command)"
     fi
   fi
 }
@@ -993,6 +1183,7 @@ configure_ssh_args() {
   mkdir -p "${STATE_DIR}"
   ssh_base_args=(
     -i "${KEY_FILE}"
+    -p "${SSH_PORT}"
     -o StrictHostKeyChecking=accept-new
     -o UserKnownHostsFile="${STATE_DIR}/known_hosts"
     -o ConnectTimeout=10
@@ -1038,7 +1229,11 @@ pull_profile_artifacts() {
 print_complete() {
   printf '\nBenchmark complete:\n'
   if [[ -n "${INSTANCE_ID}" ]]; then
-    printf '  Instance: %s (still running)\n' "${INSTANCE_ID}"
+    if [[ "${PLATFORM}" == "runpod" ]]; then
+      printf '  Pod: %s (still running)\n' "${INSTANCE_ID}"
+    else
+      printf '  Instance: %s (still running)\n' "${INSTANCE_ID}"
+    fi
   fi
   printf '  Raw results: %s\n' "${RESULT_DIR}"
   printf '  Report: %s\n' "${REPORT_PATH}"
@@ -1053,7 +1248,9 @@ main() {
   local profile_status=0
 
   parse_args "$@"
+  resolve_connection_default
   load_connection_metadata
+  resolve_provider_defaults
   resolve_defaults
   validate_inputs
   collect_source_metadata
@@ -1063,12 +1260,17 @@ main() {
     return 0
   fi
 
-  require_commands terraform ssh tar git
-  if [[ -n "${AWS_PROFILE_NAME}" ]]; then
+  if [[ "${PLATFORM}" == "aws" ]]; then
+    require_commands terraform ssh tar git
+  else
+    require_commands ssh tar git
+  fi
+  if [[ "${PLATFORM}" == "aws" && -n "${AWS_PROFILE_NAME}" ]]; then
     export AWS_PROFILE="${AWS_PROFILE_NAME}"
   fi
 
   load_outputs
+  resolve_provider_defaults
   configure_ssh_args
   print_plan
   run_remote_benchmark

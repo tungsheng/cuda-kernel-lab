@@ -1,8 +1,10 @@
-# Live GPU On AWS EC2
+# Legacy Live GPU On AWS EC2
 
-Use AWS EC2 for disposable single-GPU benchmark evidence. The normal path is a
-three-step loop: start a `g5.xlarge`, run one or more benchmark experiments, and
-tear the host down when you are done.
+Runpod is the default live-GPU provider. Use AWS EC2 for disposable single-GPU
+benchmark evidence when you need to compare against historical A10G results or
+exercise the Terraform fallback. The normal path is a three-step loop: start a
+`g5.xlarge`, run one or more benchmark experiments, and tear the host down when
+you are done.
 
 ## Defaults
 
@@ -27,7 +29,7 @@ tear the host down when you are done.
 Preview the host launch without touching AWS:
 
 ```bash
-./scripts/up --dry-run
+./scripts/up --platform aws --dry-run
 ```
 
 Start the GPU host. With no key arguments, `scripts/up` creates or reuses the
@@ -35,26 +37,26 @@ default project key at `.aws-gpu/keys/cuda-kernel-lab-${USER}.pem` and writes
 connection metadata to `.aws-gpu/connection.env`.
 
 ```bash
-./scripts/up
+./scripts/up --platform aws
 ```
 
 Run a benchmark against the host:
 
 ```bash
-./scripts/benchmark --run-id <run-id>
+./scripts/benchmark --platform aws --run-id <run-id>
 ```
 
 Run more benchmark experiments without another Terraform apply/destroy cycle:
 
 ```bash
-./scripts/benchmark --run-id <second-run-id> --include-matmul-sweep
+./scripts/benchmark --platform aws --run-id <second-run-id> --include-matmul-sweep
 ```
 
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:
 
 ```bash
-./scripts/benchmark \
+./scripts/benchmark --platform aws \
   --run-id <run-id> \
   --only-decode-step \
   --include-decode-bucket-sweep \
@@ -70,7 +72,7 @@ Use the broader evidence bundle when you want matmul, RMSNorm, attention, and
 decode-step evidence in one run:
 
 ```bash
-./scripts/benchmark \
+./scripts/benchmark --platform aws \
   --run-id <run-id> \
   --include-matmul-sweep \
   --include-rmsnorm-shape-sweep \
@@ -80,29 +82,30 @@ decode-step evidence in one run:
 ```
 
 If you edit local kernels or benchmark code while the host is still running,
-rerun `./scripts/up` to resync and re-bootstrap the remote repo before the next
-`./scripts/benchmark`.
+rerun `./scripts/up --platform aws` to resync and re-bootstrap the remote repo
+before the next `./scripts/benchmark --platform aws`.
 
 Tear the host down:
 
 ```bash
-./scripts/down
+./scripts/down --platform aws
 ```
 
 The default teardown removes generated Terraform variables and generated
-connection metadata, so the next `./scripts/up` starts with fresh host outputs.
+connection metadata, so the next `./scripts/up --platform aws` starts with
+fresh host outputs.
 
 If SSH times out on a network where HTTPS and SSH use different carrier NAT
 egress addresses, override the auto-discovered `/32` with the SSH-visible CIDR:
 
 ```bash
-./scripts/up --ingress-cidr <ssh-egress-cidr>
+./scripts/up --platform aws --ingress-cidr <ssh-egress-cidr>
 ```
 
 Add matmul progression numbers when needed:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --include-matmul
+./scripts/benchmark --platform aws --run-id <run-id> --include-matmul
 ```
 
 Collect the next recommended matmul evidence set, including the float16
@@ -110,34 +113,34 @@ tile-shape plus launch-configuration sweep and a focused matmul Nsight Compute
 profile:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
+./scripts/benchmark --platform aws --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
 Capture focused Nsight Compute evidence for the current memory bottleneck, a
 known fused-kernel win, and the current matmul tiled-dot target:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --with-profiling
+./scripts/benchmark --platform aws --run-id <run-id> --with-profiling
 ```
 
 Use an existing EC2 key pair only when you need to keep SSH access aligned with
 your own key inventory:
 
 ```bash
-./scripts/up \
+./scripts/up --platform aws \
   --key-name <key-pair-name> \
   --key-file <key-file.pem>
-./scripts/benchmark --run-id <run-id> --key-file <key-file.pem>
-./scripts/down
+./scripts/benchmark --platform aws --run-id <run-id> --key-file <key-file.pem>
+./scripts/down --platform aws
 ```
 
 ## Manual Host Flow
 
-Use `scripts/up` and `scripts/down` when you want to inspect or operate the host
-manually:
+Use `scripts/up --platform aws` and `scripts/down --platform aws` when you want
+to inspect or operate the host manually:
 
 ```bash
-./scripts/up
+./scripts/up --platform aws
 ssh -i .aws-gpu/keys/cuda-kernel-lab-${USER}.pem ubuntu@<public-ip>
 cd ~/cuda-kernel-lab
 uv run benchmark-matrix \
@@ -149,10 +152,10 @@ uv run benchmark-matrix \
   --include-attention-baseline \
   --include-decode-step
 uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
-./scripts/down
+./scripts/down --platform aws
 ```
 
-Use `./scripts/up --skip-bootstrap` for an infra-only host without SSH
+Use `./scripts/up --platform aws --skip-bootstrap` for an infra-only host without SSH
 bootstrap. Use direct Terraform only when you need to inspect or customize the
 plan:
 
@@ -168,14 +171,14 @@ terraform -chdir=infra/env/aws-gpu destroy
 
 ## Cleanup Verification
 
-After `./scripts/down`, confirm local Terraform state is empty:
+After `./scripts/down --platform aws`, confirm local Terraform state is empty:
 
 ```bash
 terraform -chdir=infra/env/aws-gpu state list
 ```
 
 The reusable dev key under `.aws-gpu/keys/` is left in place for the next
-`./scripts/up`.
+`./scripts/up --platform aws`.
 
 ## Profiler Starting Point
 
@@ -225,12 +228,12 @@ Save compact profiler notes under `profiling/reports/`.
 
 ## SSH Timeout Troubleshooting
 
-`scripts/up` discovers the default SSH ingress CIDR with
+`scripts/up --platform aws` discovers the default SSH ingress CIDR with
 `https://checkip.amazonaws.com` and opens only that IPv4 `/32`. Some networks
 route HTTPS discovery and TCP/22 through different NAT addresses. In that case
 the EC2 instance boots normally, `sshd` starts, but SSH attempts time out
 because the security group never sees traffic from the discovered `/32`.
 
-Use `./scripts/up --ingress-cidr <cidr>` when your SSH egress address is known
+Use `./scripts/up --platform aws --ingress-cidr <cidr>` when your SSH egress address is known
 to differ from HTTPS discovery. Keep the CIDR as narrow as your network allows;
 avoid opening SSH broadly.

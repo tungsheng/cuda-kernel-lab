@@ -61,6 +61,45 @@ absolute_path() {
   fi
 }
 
+dispatch_platform() {
+  local platform="${CUDA_KERNEL_LAB_PLATFORM:-runpod}"
+  local forwarded=()
+
+  while (($# > 0)); do
+    case "$1" in
+      --platform)
+        require_value "$1" "${2:-}"
+        platform=${2:-}
+        shift 2
+        ;;
+      --platform=*)
+        platform=${1#*=}
+        shift
+        ;;
+      *)
+        forwarded+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  case "${platform}" in
+    runpod)
+      exec "${SCRIPT_DIR}/runpod-down" --platform runpod "${forwarded[@]}"
+      ;;
+    aws)
+      CUDA_KERNEL_LAB_INTERNAL_AWS_DOWN=1 exec "$0" "${forwarded[@]}"
+      ;;
+    *)
+      die "--platform must be one of: runpod, aws"
+      ;;
+  esac
+}
+
+if [[ "${CUDA_KERNEL_LAB_INTERNAL_AWS_DOWN:-0}" != "1" ]]; then
+  dispatch_platform "$@"
+fi
+
 TF_DIR=$(absolute_path "${CUDA_KERNEL_LAB_TF_DIR:-${REPO_ROOT}/infra/env/aws-gpu}")
 TF_VARS_FILE=$(absolute_path "${CUDA_KERNEL_LAB_TF_VARS_FILE:-${TF_DIR}/local.auto.tfvars}")
 STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_AWS_STATE_DIR:-${REPO_ROOT}/.aws-gpu}")

@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+print_stage() {
+  printf '==> %s\n' "$1"
+}
+
+require_commands() {
+  local missing=()
+  local command_name
+
+  for command_name in "$@"; do
+    if ! command -v "${command_name}" >/dev/null 2>&1; then
+      missing+=("${command_name}")
+    fi
+  done
+
+  if ((${#missing[@]} > 0)); then
+    die "missing required command(s): ${missing[*]}"
+  fi
+}
+
+require_value() {
+  local option=$1
+  local value=${2:-}
+
+  [[ -n "${value}" && "${value}" != --* ]] || die "${option} requires a value"
+}
+
+expand_path() {
+  local path=$1
+  local home_prefix
+
+  printf -v home_prefix '%b' '\x7e/'
+
+  if [[ "${path:0:2}" == "${home_prefix}" ]]; then
+    printf '%s/%s\n' "${HOME}" "${path#~/}"
+    return
+  fi
+
+  printf '%s\n' "${path}"
+}
+
+absolute_path() {
+  local path
+  path=$(expand_path "$1")
+
+  if [[ "${path}" == /* ]]; then
+    printf '%s\n' "${path}"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "${path}"
+  fi
+}
+
+STATE_DIR=$(absolute_path "${CUDA_KERNEL_LAB_RUNPOD_STATE_DIR:-${REPO_ROOT}/.runpod}")
+CONNECTION_FILE=$(absolute_path "${CUDA_KERNEL_LAB_CONNECTION_FILE:-${STATE_DIR}/connection.env}")
+CONNECTION_FILE_EXPLICIT=0
+RUNPOD_POD_ID="${RUNPOD_POD_ID:-}"
+KEEP_CONNECTION=0
+DRY_RUN=0
+
+usage() {
+  cat <<EOF
+Usage:
+  ./scripts/down [--platform runpod] [options]
+
+Deletes the Runpod Pod recorded by ./scripts/up and removes generated connection
+metadata. Local SSH keys under .runpod/keys are preserved.
+
+Options:
+  --platform runpod              Select the Runpod provider. Default: runpod.
+  --pod-id <id>                  Pod id override. Default: connection metadata.
+  --connection-file <path>       Connection metadata path. Default: ${CONNECTION_FILE}
+  --keep-connection              Keep connection metadata after deleting the Pod.
+  --dry-run                      Print the delete command without calling Runpod.
+
+Examples:
+  ./scripts/down
+  ./scripts/down --pod-id <pod-id>
+EOF
+}
+
+parse_args() {
+  while (($# > 0)); do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --platform)
+        require_value "$1" "${2:-}"
+        [[ "${2:-}" == "runpod" ]] || die "scripts/runpod-down supports only --platform runpod"
+        shift 2
+        ;;
+      --pod-id)
+        require_value "$1" "${2:-}"
+        RUNPOD_POD_ID=${2:-}
+        shift 2
+        ;;
+      --connection-file)
+        require_value "$1" "${2:-}"
+        CONNECTION_FILE=$(absolute_path "${2:-}")
+        CONNECTION_FILE_EXPLICIT=1
+        shift 2
+        ;;
+      --keep-connection)
+        KEEP_CONNECTION=1
+        shift
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+      *)
+        die "unknown Runpod argument: $1"
+        ;;
+    esac
+  done
+}
+
+load_connection_metadata() {
+  local cli_pod_id=${RUNPOD_POD_ID}
+
+  if [[ -f "${CONNECTION_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONNECTION_FILE}"
+  fi
+
+  if [[ -n "${cli_pod_id}" ]]; then
+    RUNPOD_POD_ID=${cli_pod_id}
+  fi
+}
+
+validate_inputs() {
+  [[ -n "${RUNPOD_POD_ID}" ]] || die "missing Runpod Pod id; run ./scripts/up first or pass --pod-id"
+}
+
+print_destroy_summary() {
+  printf '\nRunpod destroy configuration:\n'
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    printf '  Mode: dry run; no Runpod commands will run\n'
+  fi
+  printf '  Pod: %s\n' "${RUNPOD_POD_ID}"
+  printf '  Connection metadata: %s\n' "${CONNECTION_FILE}"
+  if [[ "${KEEP_CONNECTION}" == "1" ]]; then
+    printf '  Connection cleanup: keep\n'
+  elif [[ "${CONNECTION_FILE_EXPLICIT}" == "1" ]]; then
+    printf '  Connection cleanup: keep explicit path\n'
+  else
+    printf '  Connection cleanup: remove generated default\n'
+  fi
+  printf '  Delete command: runpodctl pod delete %q\n' "${RUNPOD_POD_ID}"
+}
+
+delete_pod() {
+  print_stage "deleting Runpod Pod"
+  runpodctl pod delete "${RUNPOD_POD_ID}"
+}
+
+cleanup_connection_metadata() {
+  print_stage "cleaning up connection metadata"
+  if [[ "${KEEP_CONNECTION}" == "1" || "${CONNECTION_FILE_EXPLICIT}" == "1" ]]; then
+    if [[ -f "${CONNECTION_FILE}" ]]; then
+      printf 'Keeping connection metadata: %s\n' "${CONNECTION_FILE}"
+    fi
+    return 0
+  fi
+  rm -f "${CONNECTION_FILE}"
+}
+
+main() {
+  parse_args "$@"
+  load_connection_metadata
+  validate_inputs
+  print_destroy_summary
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    print_stage "dry run complete"
+    return 0
+  fi
+
+  require_commands runpodctl
+  delete_pod
+  cleanup_connection_metadata
+
+  printf '\nDown:\n'
+  printf '  Pod: %s\n' "${RUNPOD_POD_ID}"
+}
+
+main "$@"

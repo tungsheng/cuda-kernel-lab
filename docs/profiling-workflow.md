@@ -16,7 +16,7 @@ Record:
 
 ## Nsight Compute
 
-For the standard AWS evidence path, start a host with `./scripts/up`, then let
+For the standard Runpod evidence path, start a Pod with `./scripts/up`, then let
 the benchmark script collect focused profiles and compact summaries:
 
 ```bash
@@ -38,8 +38,10 @@ sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-memory --backend triton --device cuda --op vector_add
 ```
 
-On the AWS Deep Learning AMI, run `ncu` with passwordless `sudo`; otherwise
-Nsight Compute can fail with NVIDIA performance-counter permission errors.
+On Runpod, the benchmark script runs `ncu` directly as root or through
+passwordless `sudo` when available. On the legacy AWS Deep Learning AMI, run
+`ncu` with passwordless `sudo`; otherwise Nsight Compute can fail with NVIDIA
+performance-counter permission errors.
 
 Suggested profiler targets:
 
@@ -47,21 +49,21 @@ Suggested profiler targets:
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-memory --backend triton --device cuda --op vector_add \
   --dtype float32 \
-  --output experiments/results/aws-ec2/<run-id>-profiled/memory-profiled.jsonl
+  --output experiments/results/runpod/<run-id>-profiled/memory-profiled.jsonl
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-softmax --backend triton --device cuda \
   --rows 4096 --cols 1024 --dtype float32 \
-  --output experiments/results/aws-ec2/<run-id>-profiled/softmax-profiled.jsonl
+  --output experiments/results/runpod/<run-id>-profiled/softmax-profiled.jsonl
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-swiglu --backend triton --device cuda \
   --rows 4096 --cols 4096 --dtype float32 \
-  --output experiments/results/aws-ec2/<run-id>-profiled/swiglu-profiled.jsonl
+  --output experiments/results/runpod/<run-id>-profiled/swiglu-profiled.jsonl
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
   uv run benchmark-matmul --backend triton --device cuda \
   --m 1024 --n 1024 --k 1024 --dtype float16 \
   --block-m 64 --block-n 64 --block-k 32 \
   --num-warps 4 --num-stages 3 --input-precision tf32 \
-  --output experiments/results/aws-ec2/<run-id>-profiled/matmul-profiled.jsonl
+  --output experiments/results/runpod/<run-id>-profiled/matmul-profiled.jsonl
 ```
 
 Large binary captures are ignored by default. Commit compact text summaries in
@@ -75,7 +77,7 @@ uv run nsight-summary \
   --input profiling/nsight_compute/vector-add.csv \
   --output profiling/reports/vector-add-a10g.md \
   --benchmark-command "uv run benchmark-memory --backend triton --device cuda --op vector_add --dtype float32" \
-  --result-jsonl experiments/results/aws-ec2/<run-id>-profiled/memory-profiled.jsonl \
+  --result-jsonl experiments/results/runpod/<run-id>-profiled/memory-profiled.jsonl \
   --operation vector_add \
   --strategy triton-block-size
 ```

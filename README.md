@@ -35,13 +35,14 @@ On a CUDA host, collect the standard matrix and report:
 
 ```bash
 uv run benchmark-matrix --dry-run
-uv run benchmark-matrix --output-dir experiments/results/aws-ec2/<run-id>
-uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
+uv run benchmark-matrix --output-dir experiments/results/runpod/<run-id>
+uv run benchmark-report --input-dir experiments/results/runpod/<run-id>
 ```
 
-For AWS evidence runs, start one GPU host, run as many benchmark experiments as
-you need, then tear it down. The first `up` creates or reuses a project-local
-SSH key under `.aws-gpu/keys/`.
+For Runpod evidence runs, start one GPU Pod, run as many benchmark experiments
+as you need, then tear it down. The first `up` creates or reuses a project-local
+SSH key under `.runpod/keys/`. Pass `--platform aws` to use the legacy EC2
+provider.
 
 ```bash
 ./scripts/up
@@ -95,13 +96,13 @@ Move into the matmul/Tensor Core track with the focused tile and launch sweep:
 ./scripts/benchmark --run-id <run-id> --include-matmul-sweep --with-profiling
 ```
 
-Use explicit key arguments only when you need to align with an existing EC2 key
-pair:
+Use `--platform aws` and explicit key arguments only when you need to align with
+an existing EC2 key pair:
 
 ```bash
-./scripts/up --key-name <key-pair-name> --key-file <key-file.pem>
-./scripts/benchmark --run-id <run-id> --key-file <key-file.pem>
-./scripts/down
+./scripts/up --platform aws --key-name <key-pair-name> --key-file <key-file.pem>
+./scripts/benchmark --platform aws --run-id <run-id> --key-file <key-file.pem>
+./scripts/down --platform aws
 ```
 
 Save benchmark records for later analysis:
@@ -141,7 +142,8 @@ eventually Tensor Core matmul. Broader inference-system experiments belong in
 - [Docs map](docs/README.md)
 - [Benchmark workflow](docs/benchmark-workflow.md)
 - [Optimization techniques](docs/optimization-techniques.md)
-- [AWS EC2 live GPU workflow](docs/live-gpu-aws-ec2.md)
+- [Runpod live GPU workflow](docs/live-gpu-runpod.md)
+- [AWS EC2 legacy GPU workflow](docs/live-gpu-aws-ec2.md)
 - [Optimization strategies](docs/optimization-strategies.md)
 - [Interpreting results](docs/interpreting-results.md)
 - [Profiling workflow](docs/profiling-workflow.md)

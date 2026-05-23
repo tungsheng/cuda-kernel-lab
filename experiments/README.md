@@ -9,7 +9,7 @@ Recommended result output:
 uv run benchmark-memory --backend all --device cuda --op all --output experiments/results/memory.jsonl
 ```
 
-Live-GPU evidence run on disposable AWS EC2:
+Live-GPU evidence run on a disposable Runpod Pod:
 
 ```bash
 ./scripts/up
@@ -17,8 +17,8 @@ Live-GPU evidence run on disposable AWS EC2:
 ./scripts/down
 ```
 
-This writes raw JSONL under `experiments/results/aws-ec2/<run-id>/` and a
-compact report under `experiments/reports/aws-ec2/<run-id>.md`.
+This writes raw JSONL under `experiments/results/runpod/<run-id>/` and a
+compact report under `experiments/reports/runpod/<run-id>.md`.
 
 Add profiler evidence when the benchmark report points at a specific bottleneck:
 
@@ -58,11 +58,11 @@ Manual live-GPU matrix collection:
 ```bash
 uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
 uv run benchmark-matrix \
-  --output-dir experiments/results/aws-ec2/<run-id> \
+  --output-dir experiments/results/runpod/<run-id> \
   --include-vector-add-sweep \
   --include-reduction-sweep
 uv run benchmark-report \
-  --input-dir experiments/results/aws-ec2/<run-id>
+  --input-dir experiments/results/runpod/<run-id>
 ```
 
 The `experiments/results/` directory is ignored by default because JSONL runs

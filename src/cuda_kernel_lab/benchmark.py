@@ -127,9 +127,10 @@ class BenchmarkRunMetadata:
     host: dict[str, str | int | None]
     packages: dict[str, str | None]
     cuda_devices: list[dict[str, Any]]
+    provider: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "benchmark": self.benchmark,
             "args": self.args,
             "command": self.command,
@@ -140,6 +141,9 @@ class BenchmarkRunMetadata:
             "packages": self.packages,
             "cuda_devices": self.cuda_devices,
         }
+        if self.provider:
+            metadata["provider"] = self.provider
+        return metadata
 
 
 def collect_run_metadata(benchmark: str, args: Any) -> BenchmarkRunMetadata:
@@ -174,6 +178,7 @@ def collect_run_metadata(benchmark: str, args: Any) -> BenchmarkRunMetadata:
             }
             for device in collect_cuda_devices()
         ],
+        provider=_provider_metadata(),
     )
 
 
@@ -408,3 +413,17 @@ def _env_bool(value: str) -> bool | None:
     if normalized in {"0", "false", "no", "clean"}:
         return False
     return None
+
+
+def _provider_metadata() -> dict[str, str] | None:
+    fields = {
+        "name": os.environ.get("CUDA_KERNEL_LAB_PROVIDER"),
+        "id": os.environ.get("CUDA_KERNEL_LAB_PROVIDER_ID"),
+        "gpu_id": os.environ.get("CUDA_KERNEL_LAB_PROVIDER_GPU_ID"),
+        "cloud_type": os.environ.get("CUDA_KERNEL_LAB_PROVIDER_CLOUD_TYPE"),
+        "image": os.environ.get("CUDA_KERNEL_LAB_PROVIDER_IMAGE"),
+        "template_id": os.environ.get("CUDA_KERNEL_LAB_PROVIDER_TEMPLATE_ID"),
+        "region": os.environ.get("CUDA_KERNEL_LAB_PROVIDER_REGION"),
+    }
+    metadata = {key: value for key, value in fields.items() if value}
+    return metadata or None

@@ -17,9 +17,11 @@ from cuda_kernel_lab.optimization import (
     technique_from_result,
 )
 
-DEFAULT_INPUT_DIR = Path("experiments/results/aws-ec2/manual-run")
-RUN_RESULTS_ROOT = Path("experiments/results/aws-ec2")
-RUN_REPORT_ROOT = Path("experiments/reports/aws-ec2")
+DEFAULT_INPUT_DIR = Path("experiments/results/runpod/manual-run")
+RUN_RESULTS_ROOT = Path("experiments/results/runpod")
+RUN_REPORT_ROOT = Path("experiments/reports/runpod")
+LEGACY_AWS_RESULTS_ROOT = Path("experiments/results/aws-ec2")
+LEGACY_AWS_REPORT_ROOT = Path("experiments/reports/aws-ec2")
 DEFAULT_OUTPUT = RUN_REPORT_ROOT / "benchmark-report.md"
 NOISE_RATIO_THRESHOLD = 1.20
 
@@ -99,6 +101,7 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
             "",
             f"- Git commit: `{first_run.get('git_commit') or ''}`",
             f"- Git dirty: `{first_run.get('git_dirty')}`",
+            *_provider_lines(first_run.get("provider")),
             f"- Python: `{_nested(first_run, 'host', 'python')}`",
             f"- Platform: `{_nested(first_run, 'host', 'platform')}`",
             f"- PyTorch: `{_nested(first_run, 'packages', 'torch')}`",
@@ -230,11 +233,38 @@ def default_output_for(input_dir: Path) -> Path:
     try:
         run_path = normalized.relative_to(RUN_RESULTS_ROOT)
     except ValueError:
-        return DEFAULT_OUTPUT
+        try:
+            run_path = normalized.relative_to(LEGACY_AWS_RESULTS_ROOT)
+        except ValueError:
+            return DEFAULT_OUTPUT
+        if len(run_path.parts) != 1 or not run_path.parts[0]:
+            return DEFAULT_OUTPUT
+        return LEGACY_AWS_REPORT_ROOT / f"{run_path.parts[0]}.md"
 
     if len(run_path.parts) != 1 or not run_path.parts[0]:
         return DEFAULT_OUTPUT
     return RUN_REPORT_ROOT / f"{run_path.parts[0]}.md"
+
+
+def _provider_lines(provider: object) -> list[str]:
+    if not isinstance(provider, dict) or not provider:
+        return []
+
+    name = provider.get("name") or provider.get("platform")
+    fields = [f"- Provider: `{name or 'unknown'}`"]
+    provider_id = provider.get("id") or provider.get("pod_id") or provider.get("instance_id")
+    if provider_id:
+        fields.append(f"- Provider id: `{provider_id}`")
+    gpu_id = provider.get("gpu_id")
+    if gpu_id:
+        fields.append(f"- Provider GPU: `{gpu_id}`")
+    cloud_type = provider.get("cloud_type")
+    if cloud_type:
+        fields.append(f"- Provider cloud: `{cloud_type}`")
+    image = provider.get("image")
+    if image:
+        fields.append(f"- Provider image: `{image}`")
+    return fields
 
 
 def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) -> ReportRow:

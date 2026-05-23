@@ -23,6 +23,10 @@ def test_default_matrix_covers_expected_primitives_and_dtypes() -> None:
     ]
 
 
+def test_default_output_dir_uses_runpod_root() -> None:
+    assert benchmark_matrix.DEFAULT_OUTPUT_DIR == Path("experiments/results/runpod/manual-run")
+
+
 def test_matrix_commands_include_shapes_and_output_paths() -> None:
     entries = benchmark_matrix.build_matrix(
         output_dir=Path("results"),

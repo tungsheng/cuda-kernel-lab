@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_OUTPUT_DIR = Path("experiments/results/aws-ec2/manual-run")
+DEFAULT_OUTPUT_DIR = Path("experiments/results/runpod/manual-run")
 DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
 DEFAULT_MEMORY_BLOCK_SIZE = 1024

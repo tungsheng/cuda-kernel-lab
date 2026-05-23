@@ -32,6 +32,7 @@ env/
 !.env.example
 !.env.*.example
 .aws-gpu/
+.runpod/
 
 # Terraform local state and generated variables
 .terraform/

@@ -246,13 +246,19 @@ def test_report_dry_run_prints_without_writing(
 
 def test_default_output_uses_run_id_layout() -> None:
     assert benchmark_report.default_output_for(
+        Path("experiments/results/runpod/2026-05-19-l4-baseline")
+    ) == Path("experiments/reports/runpod/2026-05-19-l4-baseline.md")
+
+
+def test_default_output_preserves_legacy_aws_layout() -> None:
+    assert benchmark_report.default_output_for(
         Path("experiments/results/aws-ec2/2026-05-19-a10g-baseline")
     ) == Path("experiments/reports/aws-ec2/2026-05-19-a10g-baseline.md")
 
 
 def test_default_output_falls_back_to_reports_dir() -> None:
     assert benchmark_report.default_output_for(Path("custom/results")) == Path(
-        "experiments/reports/aws-ec2/benchmark-report.md"
+        "experiments/reports/runpod/benchmark-report.md"
     )
 
 

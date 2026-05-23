@@ -57,8 +57,8 @@ For scope boundaries, use [Kernel/System Boundary](concepts/kernel-system-bounda
 
 Start with `vector_add` block-size tuning:
 
-1. run `./scripts/benchmark --run-id <run-id> --with-profiling` on a host started with `./scripts/up`
-2. read `experiments/reports/aws-ec2/<run-id>.md`
+1. run `./scripts/benchmark --run-id <run-id> --with-profiling` on a Pod started with `./scripts/up`
+2. read `experiments/reports/runpod/<run-id>.md`
 3. profile the Triton memory bottleneck with Nsight Compute
 4. compare against the PyTorch and default Triton baseline
 5. decide whether a narrower launch/config sweep is justified

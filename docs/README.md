@@ -7,8 +7,10 @@ context, or reporting shape behind a benchmark.
 
 - [Benchmark Workflow](benchmark-workflow.md): run benchmarks and save JSONL
   records.
-- [Live GPU On AWS EC2](live-gpu-aws-ec2.md): launch a disposable `g5.xlarge`
-  host in `us-west-2` for real CUDA measurements.
+- [Live GPU On Runpod](live-gpu-runpod.md): launch a disposable Runpod Pod for
+  real CUDA measurements.
+- [Live GPU On AWS EC2](live-gpu-aws-ec2.md): legacy provider fallback using a
+  disposable `g5.xlarge` host in `us-west-2`.
 - [Interpreting Results](interpreting-results.md): read latency, bandwidth, and
   traffic-model columns.
 - [Optimization Techniques](optimization-techniques.md): name the concrete

@@ -72,6 +72,39 @@ def test_run_metadata_can_use_exported_git_context(monkeypatch) -> None:
     assert metadata.git_dirty is False
 
 
+def test_run_metadata_includes_optional_provider_context(monkeypatch) -> None:
+    monkeypatch.setenv("CUDA_KERNEL_LAB_PROVIDER", "runpod")
+    monkeypatch.setenv("CUDA_KERNEL_LAB_PROVIDER_ID", "pod-123")
+    monkeypatch.setenv("CUDA_KERNEL_LAB_PROVIDER_GPU_ID", "NVIDIA L4")
+    monkeypatch.setenv("CUDA_KERNEL_LAB_PROVIDER_CLOUD_TYPE", "SECURE")
+
+    metadata = collect_run_metadata("memory_bandwidth", argparse.Namespace(output="results.jsonl"))
+
+    assert metadata.as_dict()["provider"] == {
+        "name": "runpod",
+        "id": "pod-123",
+        "gpu_id": "NVIDIA L4",
+        "cloud_type": "SECURE",
+    }
+
+
+def test_run_metadata_omits_provider_context_by_default(monkeypatch) -> None:
+    for name in (
+        "CUDA_KERNEL_LAB_PROVIDER",
+        "CUDA_KERNEL_LAB_PROVIDER_ID",
+        "CUDA_KERNEL_LAB_PROVIDER_GPU_ID",
+        "CUDA_KERNEL_LAB_PROVIDER_CLOUD_TYPE",
+        "CUDA_KERNEL_LAB_PROVIDER_IMAGE",
+        "CUDA_KERNEL_LAB_PROVIDER_TEMPLATE_ID",
+        "CUDA_KERNEL_LAB_PROVIDER_REGION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    metadata = collect_run_metadata("memory_bandwidth", argparse.Namespace(output="results.jsonl"))
+
+    assert "provider" not in metadata.as_dict()
+
+
 @requires_torch
 def test_check_tensors_close_reports_nonfinite_values_without_nan_errors() -> None:
     result = check_tensors_close(

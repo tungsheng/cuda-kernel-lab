@@ -133,20 +133,20 @@ uv run benchmark-matrix --dry-run
 ```
 
 Then run it on the CUDA host. Without `--output-dir`, the matrix writes to
-`experiments/results/aws-ec2/manual-run`.
+`experiments/results/runpod/manual-run`.
 
 ```bash
-uv run benchmark-matrix --output-dir experiments/results/aws-ec2/<run-id>
+uv run benchmark-matrix --output-dir experiments/results/runpod/<run-id>
 ```
 
 The default matrix runs memory, softmax, normalization, and SwiGLU benchmarks for
 `float32` and `float16`. Use a run-id directory under
-`experiments/results/aws-ec2/` for live GPU evidence.
+`experiments/results/runpod/` for live GPU evidence.
 
 Generate a report from those JSONL records:
 
 ```bash
-uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
+uv run benchmark-report --input-dir experiments/results/runpod/<run-id>
 ```
 
 `benchmark-report` reads every `.jsonl` file in the input directory, so write
@@ -159,7 +159,7 @@ recommended command for the resident head-major KV path:
 
 ```bash
 uv run benchmark-matrix \
-  --output-dir experiments/results/aws-ec2/<run-id> \
+  --output-dir experiments/results/runpod/<run-id> \
   --only-decode-step \
   --include-decode-bucket-sweep \
   --include-decode-tail-sweep \
@@ -179,14 +179,16 @@ Override the tail comparison with
 `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` when the question is bucket-policy
 tradeoff rather than the current best resident path.
 
-For AWS EC2 evidence, start one host, run the benchmark matrix, and tear the
-host down after you finish the experiment batch:
+For Runpod evidence, start one Pod, run the benchmark matrix, and tear the Pod
+down after you finish the experiment batch:
 
 ```bash
 ./scripts/up
 ./scripts/benchmark --run-id <run-id>
 ./scripts/down
 ```
+
+Use `--platform aws` on all three scripts to use the legacy EC2 provider.
 
 Add `--include-matmul` when you want the default tiled matmul progression
 numbers in the same run directory. Add `--include-matmul-sweep` when you want
@@ -199,7 +201,7 @@ is launch overhead or CUDA Graph replay:
 
 ```bash
 uv run benchmark-matrix \
-  --output-dir experiments/results/aws-ec2/<run-id> \
+  --output-dir experiments/results/runpod/<run-id> \
   --include-matmul-sweep \
   --include-rmsnorm-shape-sweep \
   --include-attention-baseline \
@@ -209,7 +211,7 @@ uv run benchmark-matrix \
 When running the matrix manually, pass
 `--include-vector-add-sweep --include-reduction-sweep --include-matmul-sweep`,
 plus any focused optional baselines, and the same
-`--output-dir experiments/results/aws-ec2/<run-id>`.
+`--output-dir experiments/results/runpod/<run-id>`.
 
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
