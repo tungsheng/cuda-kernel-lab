@@ -271,6 +271,54 @@ def test_render_markdown_includes_h200_roofline_summary(tmp_path: Path) -> None:
     assert "| 1365 | 100.7 | 2.098 | 137.4 | 6.943 | compute |" in report
 
 
+def test_roofline_summary_keeps_memory_rows_with_many_matmul_rows(tmp_path: Path) -> None:
+    provider = {"name": "runpod", "gpu_id": "NVIDIA H200"}
+    records = [
+        _record(
+            benchmark="matmul",
+            name="triton:matmul",
+            dtype="bfloat16",
+            shape=(1024 + index, 1024 + index, 1024 + index),
+            p50=1.0,
+            p95=1.1,
+            p99=1.2,
+            bytes_moved=100_663_296,
+            gbps=100.0 + index,
+            flops=137_438_953_472,
+            tflops=120.0 + index,
+            provider=provider,
+            cuda_device_name="NVIDIA H200",
+        )
+        for index in range(13)
+    ]
+    records.append(
+        _record(
+            benchmark="memory_bandwidth",
+            name="triton:vector_add",
+            dtype="float32",
+            shape=(16_777_216,),
+            p50=0.1,
+            p95=0.11,
+            p99=0.12,
+            bytes_moved=134_217_728,
+            gbps=3200.0,
+            flops=16_777_216,
+            tflops=0.168,
+            provider=provider,
+            cuda_device_name="NVIDIA H200",
+        )
+    )
+    _write_jsonl(tmp_path / "roofline.jsonl", records)
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+    report = benchmark_report.render_markdown(rows, input_dir=tmp_path)
+    roofline_section = report.split("## Roofline Summary", maxsplit=1)[1].split(
+        "## Backend Detail", maxsplit=1
+    )[0]
+
+    assert "| memory | vector_add | float32 | 16777216 | triton |" in roofline_section
+
+
 def test_render_markdown_rejects_empty_input(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no benchmark JSONL records"):
         benchmark_report.render_markdown([], input_dir=tmp_path)
@@ -377,9 +425,7 @@ def _record(
         run["provider"] = provider
 
     return {
-        "run": {
-            **run,
-        },
+        "run": run,
         "result": {
             "name": name,
             "device": "cuda",

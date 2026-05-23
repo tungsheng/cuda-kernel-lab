@@ -30,6 +30,11 @@ LEGACY_AWS_RESULTS_ROOT = Path("experiments/results/aws-ec2")
 LEGACY_AWS_REPORT_ROOT = Path("experiments/reports/aws-ec2")
 DEFAULT_OUTPUT = RUN_REPORT_ROOT / "benchmark-report.md"
 NOISE_RATIO_THRESHOLD = 1.20
+ROOFLINE_SUMMARY_LIMIT = 12
+ROOFLINE_COMPUTE_ROW_LIMIT = 8
+ROOFLINE_MEMORY_ROW_LIMIT = 4
+RooflineRowIdentity = tuple[str, str, str, tuple[int, ...], str, str, str]
+RooflineSortKey = tuple[object, ...]
 
 
 @dataclass(frozen=True)
@@ -440,7 +445,7 @@ def _roofline_summary_lines(rows: list[ReportRow]) -> list[str]:
         "Math Peak % | Bound |",
         "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
-    for row in sorted(candidates, key=lambda row: _roofline_sort_key(row, spec))[:12]:
+    for row in _roofline_summary_rows(candidates, spec):
         lines.append(
             "| "
             f"{row.primitive} | {row.operation} | {row.dtype} | {_shape_label(row.shape)} | "
@@ -473,9 +478,89 @@ def _roofline_spec_for_rows(rows: list[ReportRow]) -> RooflineSpec | None:
     return None
 
 
-def _roofline_sort_key(row: ReportRow, spec: RooflineSpec) -> tuple[int, float]:
+def _roofline_summary_rows(candidates: list[ReportRow], spec: RooflineSpec) -> list[ReportRow]:
+    selected: list[ReportRow] = []
+    seen: set[RooflineRowIdentity] = set()
+
+    compute_rows = [
+        row for row in candidates if _roofline_bound_label(row, spec) == "compute"
+    ]
+    memory_rows = [
+        row for row in candidates if _roofline_bound_label(row, spec) == "memory"
+    ]
+
+    for row in sorted(compute_rows, key=lambda row: _roofline_compute_sort_key(row, spec))[
+        :ROOFLINE_COMPUTE_ROW_LIMIT
+    ]:
+        _append_roofline_row(selected, seen, row)
+    for row in sorted(memory_rows, key=lambda row: _roofline_memory_sort_key(row, spec))[
+        :ROOFLINE_MEMORY_ROW_LIMIT
+    ]:
+        _append_roofline_row(selected, seen, row)
+    for row in sorted(candidates, key=lambda row: _roofline_overall_sort_key(row, spec)):
+        if len(selected) >= ROOFLINE_SUMMARY_LIMIT:
+            break
+        _append_roofline_row(selected, seen, row)
+
+    return selected
+
+
+def _append_roofline_row(
+    selected: list[ReportRow],
+    seen: set[RooflineRowIdentity],
+    row: ReportRow,
+) -> None:
+    identity = (
+        row.primitive,
+        row.operation,
+        row.dtype,
+        row.shape,
+        row.variant,
+        row.backend,
+        row.strategy,
+    )
+    if identity in seen:
+        return
+    selected.append(row)
+    seen.add(identity)
+
+
+def _roofline_compute_sort_key(row: ReportRow, spec: RooflineSpec) -> RooflineSortKey:
+    return (
+        0 if row.primitive == "matmul" else 1,
+        -(_math_peak_pct(row, spec) or 0.0),
+        -(_memory_peak_pct(row, spec) or 0.0),
+        *_roofline_stable_sort_key(row),
+    )
+
+
+def _roofline_memory_sort_key(row: ReportRow, spec: RooflineSpec) -> RooflineSortKey:
+    return (
+        -(_memory_peak_pct(row, spec) or 0.0),
+        -(_math_peak_pct(row, spec) or 0.0),
+        *_roofline_stable_sort_key(row),
+    )
+
+
+def _roofline_overall_sort_key(row: ReportRow, spec: RooflineSpec) -> RooflineSortKey:
     peak_pct = max(_math_peak_pct(row, spec) or 0.0, _memory_peak_pct(row, spec) or 0.0)
-    return (0 if row.primitive == "matmul" else 1, -peak_pct)
+    return (
+        0 if row.primitive == "matmul" else 1,
+        -peak_pct,
+        *_roofline_stable_sort_key(row),
+    )
+
+
+def _roofline_stable_sort_key(row: ReportRow) -> RooflineSortKey:
+    return (
+        row.primitive,
+        row.operation,
+        row.dtype,
+        row.shape,
+        row.variant,
+        row.backend,
+        row.strategy,
+    )
 
 
 def _memory_peak_pct(row: ReportRow, spec: RooflineSpec) -> float | None:

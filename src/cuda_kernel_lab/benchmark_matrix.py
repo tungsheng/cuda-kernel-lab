@@ -21,6 +21,7 @@ DEFAULT_MATMUL_BLOCK_K = 32
 DEFAULT_MATMUL_NUM_WARPS = 4
 DEFAULT_MATMUL_NUM_STAGES = 3
 DEFAULT_MATMUL_INPUT_PRECISION = "ieee"
+DEFAULT_ACCELERATOR_SUITE_MATMUL_INPUT_PRECISION = "tf32"
 DEFAULT_MATMUL_SWEEP_TILE_SHAPES = (
     (16, 32, 32),
     (32, 16, 32),
@@ -121,7 +122,7 @@ def build_matrix(
     matmul_block_k: int = DEFAULT_MATMUL_BLOCK_K,
     matmul_num_warps: int = DEFAULT_MATMUL_NUM_WARPS,
     matmul_num_stages: int = DEFAULT_MATMUL_NUM_STAGES,
-    matmul_input_precision: str = DEFAULT_MATMUL_INPUT_PRECISION,
+    matmul_input_precision: str | None = None,
     include_matmul_sweep: bool = False,
     matmul_sweep_tile_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_TILE_SHAPES,
     matmul_sweep_launch_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS,
@@ -158,6 +159,12 @@ def build_matrix(
     """Build the default live-GPU benchmark command matrix."""
 
     suite = _normalize_suite(suite)
+    if matmul_input_precision is None:
+        matmul_input_precision = (
+            DEFAULT_ACCELERATOR_SUITE_MATMUL_INPUT_PRECISION
+            if suite in {"h200-roofline", "tensor-core"}
+            else DEFAULT_MATMUL_INPUT_PRECISION
+        )
     if suite in {"h200-roofline", "tensor-core"}:
         include_tensor_core_suite = True
         include_matmul_sweep = True
@@ -681,8 +688,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--matmul-input-precision",
         choices=MATMUL_INPUT_PRECISIONS,
-        default=DEFAULT_MATMUL_INPUT_PRECISION,
-        help="Triton tl.dot input precision passed to benchmark-matmul.",
+        default=None,
+        help=(
+            "Triton tl.dot input precision passed to benchmark-matmul. "
+            "Defaults to ieee for the standard suite and tf32 for accelerator suites."
+        ),
     )
     parser.add_argument(
         "--include-matmul-sweep",

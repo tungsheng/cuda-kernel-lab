@@ -201,8 +201,11 @@ def test_h200_roofline_suite_adds_focused_benchmark_tracks() -> None:
         matmul_sweep_launch_configs=((4, 3),),
     )
     command_lines = [entry.shell_line() for entry in entries]
+    matmul_lines = [line for line in command_lines if "results/matmul.jsonl" in line]
+    tile_lines = [line for line in command_lines if "results/matmul-tile-shape.jsonl" in line]
 
-    assert any("results/matmul-tile-shape.jsonl" in line for line in command_lines)
+    assert tile_lines
+    assert all("--input-precision tf32" in line for line in matmul_lines + tile_lines)
     assert any("--dtype bfloat16" in line for line in command_lines)
     assert any("results/rmsnorm-shape-sweep.jsonl" in line for line in command_lines)
     assert any("results/attention.jsonl" in line for line in command_lines)
