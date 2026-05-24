@@ -23,9 +23,26 @@ the benchmark script collect focused profiles and compact summaries:
 ./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
+The default profile mode is `light`: it captures the counters used by
+`nsight-summary` and applies a per-target timeout so live runs fail fast enough
+to keep the Pod useful. Use `--profile-mode full` only when a target already
+justifies the longer Nsight Compute collection.
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --profile-only \
+  --profile-targets matmul-llm-down-bfloat16 \
+  --profile-timeout-seconds 120
+```
+
+`--profile-only` skips `benchmark-matrix` and reruns just the selected Nsight
+targets, which is the fastest loop after an H200 benchmark report identifies a
+specific kernel gap.
+
 For H200 Tensor Core/roofline evidence, use the named suite. This adds larger
-FP16/BF16 matmul rows, LLM-shape tuning rows, and extra matmul profile targets
-for Tensor Core counters:
+FP16/BF16 matmul rows, LLM-shape tuning rows, grouped-impact rows, and extra
+matmul profile targets for Tensor Core counters:
 
 ```bash
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
@@ -43,7 +60,7 @@ Compute when the question is p95/p99 stability; those rows provide longer
 multi-seed, multi-policy timing evidence while the profiler rows explain
 individual kernels.
 
-Example command shape:
+Example full-capture command shape:
 
 ```bash
 sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \

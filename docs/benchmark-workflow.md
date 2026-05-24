@@ -215,8 +215,8 @@ plus any focused optional baselines, and the same
 
 Use the named H200 roofline suite when the experiment should focus on Tensor
 Core matmul, BF16/FP16 comparison, RMSNorm shape scaling, attention baseline
-context, focused LLM-shape matmul tuning, and profiler-backed roofline
-interpretation:
+context, focused LLM-shape matmul tuning, grouped program-ordering candidates,
+and profiler-backed roofline interpretation:
 
 ```bash
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
@@ -243,7 +243,10 @@ milestone is about HMMA utilization; use standalone `benchmark-matmul` runs for
 float32 precision experiments. The Tensor Core suite separately appends large
 FP16/BF16 rows to `matmul-tensor-core.jsonl`. The H200 roofline suite also
 appends shape-specific tuning rows to `matmul-tuning.jsonl` for the large
-square and asymmetric LLM GEMMs that need the most profiler-guided work. The
+square and asymmetric LLM GEMMs that need the most profiler-guided work. It
+also writes `matmul-llm-impact.jsonl`, which compares the asymmetric LLM
+projection shapes across grouped `M` program ordering and shape-specific tile
+choices so H200 runs surface the highest-impact matmul gap directly. The
 RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
 The fixed-shape decode-step graph benchmark writes to `decode-step.jsonl`. The

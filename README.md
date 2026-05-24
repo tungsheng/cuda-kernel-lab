@@ -90,6 +90,18 @@ Add focused Nsight Compute profiler captures to a benchmark run:
 ./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
+Profiling defaults to a lightweight metric set with a per-target timeout. Rerun
+only the profiler for a specific target when the benchmark results already
+exist or a previous profile run timed out:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --profile-only \
+  --profile-targets matmul-llm-down-bfloat16 \
+  --profile-timeout-seconds 120
+```
+
 Move into the matmul/Tensor Core track with the focused tile and launch sweep:
 
 ```bash
@@ -105,7 +117,8 @@ depth rather than the default broad smoke matrix:
 
 Runpod bootstrap installs Nsight Compute by default so profiling can preflight
 `ncu` before the benchmark starts. The H200 suite also includes focused matmul
-tuning rows for the square and asymmetric LLM GEMM shapes.
+tuning rows for the square and asymmetric LLM GEMM shapes, plus grouped
+program-ordering rows in `matmul-llm-impact.jsonl`.
 
 Use `--platform aws` and explicit key arguments only when you need to align with
 an existing EC2 key pair:

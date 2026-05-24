@@ -20,6 +20,7 @@ DEFAULT_BLOCK_K = 32
 DEFAULT_NUM_WARPS = 4
 DEFAULT_NUM_STAGES = 3
 DEFAULT_INPUT_PRECISION = "ieee"
+DEFAULT_GROUP_M = 1
 INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
 
 
@@ -39,12 +40,13 @@ def matmul(
     num_warps: int = DEFAULT_NUM_WARPS,
     num_stages: int = DEFAULT_NUM_STAGES,
     input_precision: str = DEFAULT_INPUT_PRECISION,
+    group_m: int = DEFAULT_GROUP_M,
     out: Any | None = None,
 ) -> Any:
     """Return a @ b using a tiled Triton kernel."""
 
     _require_positive_blocks(block_m=block_m, block_n=block_n, block_k=block_k)
-    _require_positive_launch(num_warps=num_warps, num_stages=num_stages)
+    _require_positive_launch(num_warps=num_warps, num_stages=num_stages, group_m=group_m)
     _require_input_precision(input_precision)
     _require_matmul_inputs(a, b)
     m, k = a.shape
@@ -69,6 +71,7 @@ def matmul(
         block_n,
         block_k,
         input_precision,
+        group_m,
         num_warps=num_warps,
         num_stages=num_stages,
     )
@@ -80,9 +83,9 @@ def _require_positive_blocks(*, block_m: int, block_n: int, block_k: int) -> Non
         raise ValueError("block_m, block_n, and block_k must be positive")
 
 
-def _require_positive_launch(*, num_warps: int, num_stages: int) -> None:
-    if num_warps <= 0 or num_stages <= 0:
-        raise ValueError("num_warps and num_stages must be positive")
+def _require_positive_launch(*, num_warps: int, num_stages: int, group_m: int) -> None:
+    if num_warps <= 0 or num_stages <= 0 or group_m <= 0:
+        raise ValueError("num_warps, num_stages, and group_m must be positive")
 
 
 def _require_input_precision(input_precision: str) -> None:
@@ -137,11 +140,17 @@ if triton is not None and tl is not None:
         block_n: tl.constexpr,
         block_k: tl.constexpr,
         input_precision: tl.constexpr,
+        group_m: tl.constexpr,
     ):
         pid = tl.program_id(0)
+        num_pid_m = tl.cdiv(m, block_m)
         num_pid_n = tl.cdiv(n, block_n)
-        pid_m = pid // num_pid_n
-        pid_n = pid - pid_m * num_pid_n
+        num_pid_in_group = group_m * num_pid_n
+        group_id = pid // num_pid_in_group
+        first_pid_m = group_id * group_m
+        group_size_m = min(num_pid_m - first_pid_m, group_m)
+        pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+        pid_n = (pid % num_pid_in_group) // group_size_m
 
         offs_m = pid_m * block_m + tl.arange(0, block_m)
         offs_n = pid_n * block_n + tl.arange(0, block_n)

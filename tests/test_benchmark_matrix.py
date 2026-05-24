@@ -134,6 +134,21 @@ def test_matrix_can_include_matmul_progression() -> None:
     ) in command_lines
 
 
+def test_matrix_can_select_grouped_matmul_program_ordering() -> None:
+    entries = benchmark_matrix.build_matrix(
+        output_dir=Path("results"),
+        include_matmul=True,
+        matmul_group_m=4,
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert any(
+        "--input-precision ieee --group-m 4 --warmup 25 --iterations 100 "
+        "--output results/matmul.jsonl" in line
+        for line in command_lines
+    )
+
+
 def test_matrix_can_include_matmul_strategy_sweep() -> None:
     entries = benchmark_matrix.build_matrix(
         output_dir=Path("results"),
@@ -204,12 +219,17 @@ def test_h200_roofline_suite_adds_focused_benchmark_tracks() -> None:
     matmul_lines = [line for line in command_lines if "results/matmul.jsonl" in line]
     tile_lines = [line for line in command_lines if "results/matmul-tile-shape.jsonl" in line]
     tuning_lines = [line for line in command_lines if "results/matmul-tuning.jsonl" in line]
+    impact_lines = [line for line in command_lines if "results/matmul-llm-impact.jsonl" in line]
 
     assert tile_lines
     assert tuning_lines
+    assert impact_lines
     accelerator_matmul_lines = matmul_lines + tile_lines + tuning_lines
     assert all("--input-precision tf32" in line for line in accelerator_matmul_lines)
     assert any("--m 512 --n 11008 --k 4096 --dtype bfloat16" in line for line in tuning_lines)
+    assert any("--m 512 --n 11008 --k 4096 --dtype bfloat16" in line for line in impact_lines)
+    assert any("--group-m 4" in line for line in impact_lines)
+    assert any("--group-m 8" in line for line in impact_lines)
     assert any("--dtype bfloat16" in line for line in command_lines)
     assert any("results/rmsnorm-shape-sweep.jsonl" in line for line in command_lines)
     assert any("results/attention.jsonl" in line for line in command_lines)
@@ -408,6 +428,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="matmul launch settings"):
         benchmark_matrix.build_matrix(matmul_num_warps=0)
 
+    with pytest.raises(ValueError, match="matmul launch settings"):
+        benchmark_matrix.build_matrix(matmul_group_m=0)
+
     with pytest.raises(ValueError, match="matmul_input_precision"):
         benchmark_matrix.build_matrix(matmul_input_precision="fast")
 
@@ -434,6 +457,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
 
     with pytest.raises(ValueError, match="matmul_tuning_configs"):
         benchmark_matrix.build_matrix(matmul_tuning_configs=((128, 128, 64),))
+
+    with pytest.raises(ValueError, match="matmul_llm_impact_configs"):
+        benchmark_matrix.build_matrix(matmul_llm_impact_configs=((128, 128, 64),))
 
     with pytest.raises(ValueError, match="rmsnorm_shape_sweep_shapes"):
         benchmark_matrix.build_matrix(rmsnorm_shape_sweep_shapes=((1024,),))
@@ -520,6 +546,11 @@ def test_matrix_parses_strategy_sweep_values(
             "512x4096x11008",
             "--matmul-tuning-configs",
             "64x128x32x8x4",
+            "--include-matmul-llm-impact-suite",
+            "--matmul-llm-impact-shapes",
+            "512x11008x4096",
+            "--matmul-llm-impact-configs",
+            "128x128x64x4x4x4",
             "--include-attention-baseline",
             "--attention-seq-len",
             "4096",
@@ -549,11 +580,17 @@ def test_matrix_parses_strategy_sweep_values(
     assert "results/matmul-tile-shape.jsonl" in output
     assert "results/matmul-tensor-core.jsonl" in output
     assert "results/matmul-tuning.jsonl" in output
+    assert "results/matmul-llm-impact.jsonl" in output
     assert "--m 2048 --n 2048 --k 2048 --dtype bfloat16" in output
     assert "--m 512 --n 4096 --k 11008 --dtype bfloat16" in output
+    assert "--m 512 --n 11008 --k 4096 --dtype bfloat16" in output
     assert "--block-m 16 --block-n 32 --block-k 32" in output
     assert "--block-m 32 --block-n 16 --block-k 32" in output
     assert "--block-m 64 --block-n 128 --block-k 32 --num-warps 8 --num-stages 4" in output
+    assert (
+        "--block-m 128 --block-n 128 --block-k 64 --num-warps 4 --num-stages 4 "
+        "--input-precision tf32 --group-m 4"
+    ) in output
     assert "--num-warps 8 --num-stages 4" in output
     assert "results/rmsnorm-shape-sweep.jsonl" in output
     assert "--rows 512 --cols 1024 --dtype float16" in output

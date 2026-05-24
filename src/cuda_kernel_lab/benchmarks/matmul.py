@@ -50,6 +50,7 @@ def main() -> None:
                 num_warps=args.num_warps,
                 num_stages=args.num_stages,
                 input_precision=args.input_precision,
+                group_m=args.group_m,
                 warmup=args.warmup,
                 iterations=args.iterations,
                 skip_correctness=args.skip_correctness,
@@ -69,6 +70,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--block-k", type=int, default=32)
     parser.add_argument("--num-warps", type=int, default=4)
     parser.add_argument("--num-stages", type=int, default=3)
+    parser.add_argument(
+        "--group-m",
+        type=int,
+        default=1,
+        help="Number of M tiles grouped together when mapping Triton programs.",
+    )
     parser.add_argument(
         "--input-precision",
         choices=INPUT_PRECISIONS,
@@ -102,6 +109,7 @@ def run_one(
     num_warps: int,
     num_stages: int,
     input_precision: str,
+    group_m: int,
     warmup: int,
     iterations: int,
     skip_correctness: bool,
@@ -110,8 +118,8 @@ def run_one(
         raise ValueError("m, n, and k must be positive")
     if block_m <= 0 or block_n <= 0 or block_k <= 0:
         raise ValueError("block_m, block_n, and block_k must be positive")
-    if num_warps <= 0 or num_stages <= 0:
-        raise ValueError("num_warps and num_stages must be positive")
+    if num_warps <= 0 or num_stages <= 0 or group_m <= 0:
+        raise ValueError("num_warps, num_stages, and group_m must be positive")
     if input_precision not in INPUT_PRECISIONS:
         choices = ", ".join(INPUT_PRECISIONS)
         raise ValueError(f"input_precision must be one of: {choices}")
@@ -130,6 +138,7 @@ def run_one(
         num_warps,
         num_stages,
         input_precision,
+        group_m,
     )
     correctness = None
     if not skip_correctness:
@@ -144,6 +153,7 @@ def run_one(
             num_warps,
             num_stages,
             input_precision,
+            group_m,
         )()
         actual = fn()
         rtol, atol = correctness_tolerance(dtype)
@@ -171,7 +181,7 @@ def run_one(
         variant=(
             f"block_m={block_m}, block_n={block_n}, block_k={block_k}, "
             f"num_warps={num_warps}, num_stages={num_stages}, "
-            f"input_precision={input_precision}"
+            f"input_precision={input_precision}, group_m={group_m}"
         ),
         parameters={
             "block_m": block_m,
@@ -180,6 +190,7 @@ def run_one(
             "num_warps": num_warps,
             "num_stages": num_stages,
             "input_precision": input_precision,
+            "group_m": group_m,
         },
         optimization=matmul_optimization(backend=backend),
         correctness=correctness,
@@ -197,6 +208,7 @@ def build_op(
     num_warps: int,
     num_stages: int,
     input_precision: str,
+    group_m: int,
 ) -> Callable[[], Any]:
     if backend == "torch":
         from cuda_kernel_lab.kernels.torch_baselines import matmul
@@ -215,6 +227,7 @@ def build_op(
             num_warps=num_warps,
             num_stages=num_stages,
             input_precision=input_precision,
+            group_m=group_m,
             out=out,
         )
 

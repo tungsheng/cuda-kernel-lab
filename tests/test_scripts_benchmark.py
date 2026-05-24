@@ -106,6 +106,8 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
     )
 
     assert "Benchmark suite: h200-roofline" in result.stdout
+    assert "Profile mode: light" in result.stdout
+    assert "Profile timeout seconds: 600" in result.stdout
     assert (
         "benchmark-matrix\\ --output-dir\\ experiments/results/runpod/test-run\\ "
         "--suite\\ h200-roofline"
@@ -113,7 +115,70 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
     assert "matmul-tensor-core-bfloat16" in result.stdout
     assert "matmul-llm-down-bfloat16" in result.stdout
     assert "find_ncu_bin" in result.stdout
+    system_path = "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    assert system_path in result.stdout
+    assert 'ncu_runner=\\\'env\\\'' in result.stdout
+    assert 'HOME=\\"\\$HOME\\"' in result.stdout
+    assert 'PATH=\\"\\$PATH\\"' in result.stdout
+    assert '\\"\\$\\{ncu_bin\\}\\"' in result.stdout
+    assert "gpu__time_duration.sum" in result.stdout
+    assert "timeout\\ 600" in result.stdout
     assert "Profile summaries: profiling/reports/test-run" in result.stdout
+
+
+def test_benchmark_dry_run_can_run_profile_only_target(tmp_path: Path) -> None:
+    connection_file = tmp_path / "runpod.env"
+    connection_file.write_text(
+        "\n".join(
+            [
+                "PROVIDER_PLATFORM=runpod",
+                "RUNPOD_POD_ID=pod123",
+                "RUNPOD_GPU_ID='NVIDIA H200'",
+                "KEY_FILE=/tmp/fake-runpod-key",
+                "SSH_USER=root",
+                "SSH_HOST=203.0.113.10",
+                "SSH_PORT=2222",
+                "REMOTE_DIR=cuda-kernel-lab",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/benchmark",
+            "--dry-run",
+            "--platform",
+            "runpod",
+            "--connection-file",
+            str(connection_file),
+            "--run-id",
+            "test-profile-only",
+            "--profile-only",
+            "--profile-mode",
+            "full",
+            "--profile-timeout-seconds",
+            "120",
+            "--profile-targets",
+            "matmul-llm-down-bfloat16",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert "Profile-only: enabled" in result.stdout
+    assert "Profile mode: full" in result.stdout
+    assert "Profile timeout seconds: 120" in result.stdout
+    assert "Profile targets: matmul-llm-down-bfloat16" in result.stdout
+    assert "benchmark-matrix" not in result.stdout
+    assert "matmul-llm-down-bfloat16" in result.stdout
+    assert "matmul-llm-up-bfloat16" not in result.stdout
+    assert "--set" in result.stdout
+    assert "full" in result.stdout
+    assert "timeout\\ 120" in result.stdout
 
 
 def test_benchmark_dry_run_preserves_aws_connection(tmp_path: Path) -> None:

@@ -58,8 +58,19 @@ suite with profiling:
 ```
 
 Runpod bootstrap installs and validates Nsight Compute by default so
-`--with-profiling` can collect `ncu` CSVs. Use
-`./scripts/up --no-install-nsight-compute` only for benchmark-only Pods.
+`--with-profiling` can collect `ncu` CSVs. Profiling defaults to a lightweight
+counter set with a timeout; rerun a single target with `--profile-only` when the
+report points to one kernel:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --profile-only \
+  --profile-targets matmul-llm-down-bfloat16 \
+  --profile-timeout-seconds 120
+```
+
+Use `./scripts/up --no-install-nsight-compute` only for benchmark-only Pods.
 
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:

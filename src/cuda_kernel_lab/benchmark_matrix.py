@@ -21,6 +21,7 @@ DEFAULT_MATMUL_BLOCK_K = 32
 DEFAULT_MATMUL_NUM_WARPS = 4
 DEFAULT_MATMUL_NUM_STAGES = 3
 DEFAULT_MATMUL_INPUT_PRECISION = "ieee"
+DEFAULT_MATMUL_GROUP_M = 1
 DEFAULT_ACCELERATOR_SUITE_MATMUL_INPUT_PRECISION = "tf32"
 DEFAULT_MATMUL_SWEEP_TILE_SHAPES = (
     (16, 32, 32),
@@ -51,17 +52,30 @@ DEFAULT_TENSOR_CORE_BLOCK_N = 128
 DEFAULT_TENSOR_CORE_BLOCK_K = 64
 DEFAULT_TENSOR_CORE_NUM_WARPS = 4
 DEFAULT_TENSOR_CORE_NUM_STAGES = 4
+DEFAULT_TENSOR_CORE_GROUP_M = 1
 DEFAULT_MATMUL_TUNING_SHAPES = (
     (4096, 4096, 4096),
     (512, 4096, 11008),
     (512, 11008, 4096),
 )
 DEFAULT_MATMUL_TUNING_CONFIGS = (
-    (64, 64, 32, 8, 4),
-    (64, 128, 32, 8, 4),
-    (128, 64, 32, 4, 4),
-    (64, 128, 64, 4, 4),
-    (128, 64, 64, 4, 4),
+    (64, 64, 32, 8, 4, DEFAULT_MATMUL_GROUP_M),
+    (64, 128, 32, 8, 4, DEFAULT_MATMUL_GROUP_M),
+    (128, 64, 32, 4, 4, DEFAULT_MATMUL_GROUP_M),
+    (64, 128, 64, 4, 4, DEFAULT_MATMUL_GROUP_M),
+    (128, 64, 64, 4, 4, DEFAULT_MATMUL_GROUP_M),
+)
+DEFAULT_MATMUL_LLM_IMPACT_SHAPES = (
+    (512, 4096, 11008),
+    (512, 11008, 4096),
+)
+DEFAULT_MATMUL_LLM_IMPACT_CONFIGS = (
+    (128, 128, 64, 4, 4, DEFAULT_MATMUL_GROUP_M),
+    (128, 128, 64, 4, 4, 4),
+    (128, 128, 64, 4, 4, 8),
+    (64, 128, 64, 4, 4, 4),
+    (128, 64, 64, 4, 4, 4),
+    (32, 256, 64, 4, 4, 4),
 )
 DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES = (
     (512, 1024),
@@ -135,6 +149,7 @@ def build_matrix(
     matmul_num_warps: int = DEFAULT_MATMUL_NUM_WARPS,
     matmul_num_stages: int = DEFAULT_MATMUL_NUM_STAGES,
     matmul_input_precision: str | None = None,
+    matmul_group_m: int = DEFAULT_MATMUL_GROUP_M,
     include_matmul_sweep: bool = False,
     matmul_sweep_tile_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_TILE_SHAPES,
     matmul_sweep_launch_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_SWEEP_LAUNCH_CONFIGS,
@@ -144,6 +159,11 @@ def build_matrix(
     include_matmul_tuning_suite: bool = False,
     matmul_tuning_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_TUNING_SHAPES,
     matmul_tuning_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_TUNING_CONFIGS,
+    include_matmul_llm_impact_suite: bool = False,
+    matmul_llm_impact_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_LLM_IMPACT_SHAPES,
+    matmul_llm_impact_configs: tuple[
+        tuple[int, ...], ...
+    ] = DEFAULT_MATMUL_LLM_IMPACT_CONFIGS,
     include_rmsnorm_shape_sweep: bool = False,
     rmsnorm_shape_sweep_shapes: tuple[tuple[int, ...], ...] = DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES,
     rmsnorm_shape_sweep_dtype: str = DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE,
@@ -187,6 +207,7 @@ def build_matrix(
         include_attention_baseline = True
     if suite == "h200-roofline":
         include_matmul_tuning_suite = True
+        include_matmul_llm_impact_suite = True
 
     if warmup < 0:
         raise ValueError("warmup must be non-negative")
@@ -198,7 +219,7 @@ def build_matrix(
         raise ValueError("swiglu_block_size must be positive")
     if matmul_block_m <= 0 or matmul_block_n <= 0 or matmul_block_k <= 0:
         raise ValueError("matmul block sizes must be positive")
-    if matmul_num_warps <= 0 or matmul_num_stages <= 0:
+    if matmul_num_warps <= 0 or matmul_num_stages <= 0 or matmul_group_m <= 0:
         raise ValueError("matmul launch settings must be positive")
     if matmul_input_precision not in MATMUL_INPUT_PRECISIONS:
         raise ValueError("matmul_input_precision must be one of tf32, tf32x3, ieee")
@@ -222,10 +243,20 @@ def build_matrix(
         raise ValueError("matmul_tuning_shapes must be MxNxK triples")
     if any(any(dim <= 0 for dim in shape) for shape in matmul_tuning_shapes):
         raise ValueError("matmul_tuning_shapes must be positive")
-    if any(len(config) != 5 for config in matmul_tuning_configs):
-        raise ValueError("matmul_tuning_configs must be MxNxKxWARPSxSTAGES values")
+    if any(len(config) != 6 for config in matmul_tuning_configs):
+        raise ValueError("matmul_tuning_configs must be MxNxKxWARPSxSTAGESxGROUPM values")
     if any(any(dim <= 0 for dim in config) for config in matmul_tuning_configs):
         raise ValueError("matmul_tuning_configs must be positive")
+    if any(len(shape) != 3 for shape in matmul_llm_impact_shapes):
+        raise ValueError("matmul_llm_impact_shapes must be MxNxK triples")
+    if any(any(dim <= 0 for dim in shape) for shape in matmul_llm_impact_shapes):
+        raise ValueError("matmul_llm_impact_shapes must be positive")
+    if any(len(config) != 6 for config in matmul_llm_impact_configs):
+        raise ValueError(
+            "matmul_llm_impact_configs must be MxNxKxWARPSxSTAGESxGROUPM values"
+        )
+    if any(any(dim <= 0 for dim in config) for config in matmul_llm_impact_configs):
+        raise ValueError("matmul_llm_impact_configs must be positive")
     if any(len(shape) != 2 for shape in rmsnorm_shape_sweep_shapes):
         raise ValueError("rmsnorm_shape_sweep_shapes must be ROWSxCOLS pairs")
     if any(any(dim <= 0 for dim in shape) for shape in rmsnorm_shape_sweep_shapes):
@@ -276,6 +307,7 @@ def build_matrix(
         matmul_num_warps,
         matmul_num_stages,
         matmul_input_precision,
+        matmul_group_m,
     )
     if not only_decode_step:
         for dtype in DTYPES:
@@ -409,6 +441,7 @@ def build_matrix(
                             num_warps=matmul_num_warps,
                             num_stages=matmul_num_stages,
                             input_precision=matmul_input_precision,
+                            group_m=matmul_group_m,
                             warmup=warmup,
                             iterations=iterations,
                             output=output_dir / "matmul.jsonl",
@@ -498,6 +531,7 @@ def build_matrix(
             num_warps,
             num_stages,
             input_precision,
+            group_m,
         ) in _extra_matmul_configs(
             matmul_sweep_tile_shapes,
             matmul_sweep_launch_configs,
@@ -517,6 +551,7 @@ def build_matrix(
                         num_warps=num_warps,
                         num_stages=num_stages,
                         input_precision=input_precision,
+                        group_m=group_m,
                         warmup=warmup,
                         iterations=iterations,
                         output=output_dir / "matmul-tile-shape.jsonl",
@@ -539,6 +574,7 @@ def build_matrix(
                             num_warps=DEFAULT_TENSOR_CORE_NUM_WARPS,
                             num_stages=DEFAULT_TENSOR_CORE_NUM_STAGES,
                             input_precision="tf32",
+                            group_m=DEFAULT_TENSOR_CORE_GROUP_M,
                             warmup=warmup,
                             iterations=iterations,
                             output=output_dir / "matmul-tensor-core.jsonl",
@@ -551,7 +587,14 @@ def build_matrix(
     if include_matmul_tuning_suite and not only_decode_step:
         for dtype in tensor_core_dtypes:
             for m, n, k in matmul_tuning_shapes:
-                for block_m, block_n, block_k, num_warps, num_stages in matmul_tuning_configs:
+                for (
+                    block_m,
+                    block_n,
+                    block_k,
+                    num_warps,
+                    num_stages,
+                    group_m,
+                ) in matmul_tuning_configs:
                     commands.append(
                         MatrixCommand(
                             primitive="matmul",
@@ -565,9 +608,44 @@ def build_matrix(
                                 num_warps=num_warps,
                                 num_stages=num_stages,
                                 input_precision="tf32",
+                                group_m=group_m,
                                 warmup=warmup,
                                 iterations=iterations,
                                 output=output_dir / "matmul-tuning.jsonl",
+                                m=m,
+                                n=n,
+                                k=k,
+                            ),
+                        )
+                    )
+    if include_matmul_llm_impact_suite and not only_decode_step:
+        for dtype in tensor_core_dtypes:
+            for m, n, k in matmul_llm_impact_shapes:
+                for (
+                    block_m,
+                    block_n,
+                    block_k,
+                    num_warps,
+                    num_stages,
+                    group_m,
+                ) in matmul_llm_impact_configs:
+                    commands.append(
+                        MatrixCommand(
+                            primitive="matmul",
+                            dtype=dtype,
+                            command=_matmul_command(
+                                device=device,
+                                dtype=dtype,
+                                block_m=block_m,
+                                block_n=block_n,
+                                block_k=block_k,
+                                num_warps=num_warps,
+                                num_stages=num_stages,
+                                input_precision="tf32",
+                                group_m=group_m,
+                                warmup=warmup,
+                                iterations=iterations,
+                                output=output_dir / "matmul-llm-impact.jsonl",
                                 m=m,
                                 n=n,
                                 k=k,
@@ -736,6 +814,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--matmul-block-k", type=int, default=DEFAULT_MATMUL_BLOCK_K)
     parser.add_argument("--matmul-num-warps", type=int, default=DEFAULT_MATMUL_NUM_WARPS)
     parser.add_argument("--matmul-num-stages", type=int, default=DEFAULT_MATMUL_NUM_STAGES)
+    parser.add_argument("--matmul-group-m", type=int, default=DEFAULT_MATMUL_GROUP_M)
     parser.add_argument(
         "--matmul-input-precision",
         choices=MATMUL_INPUT_PRECISIONS,
@@ -789,8 +868,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--matmul-tuning-configs",
         default=_join_matmul_tuning_configs(DEFAULT_MATMUL_TUNING_CONFIGS),
         help=(
-            "Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGES configs for "
+            "Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGESxGROUPM configs for "
             "--include-matmul-tuning-suite."
+        ),
+    )
+    parser.add_argument(
+        "--include-matmul-llm-impact-suite",
+        action="store_true",
+        help="Add shape-aware LLM projection matmul rows with grouped program ordering.",
+    )
+    parser.add_argument(
+        "--matmul-llm-impact-shapes",
+        default=_join_tile_shapes(DEFAULT_MATMUL_LLM_IMPACT_SHAPES),
+        help="Comma-separated MxNxK shapes for --include-matmul-llm-impact-suite.",
+    )
+    parser.add_argument(
+        "--matmul-llm-impact-configs",
+        default=_join_matmul_tuning_configs(DEFAULT_MATMUL_LLM_IMPACT_CONFIGS),
+        help=(
+            "Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGESxGROUPM configs for "
+            "--include-matmul-llm-impact-suite."
         ),
     )
     parser.add_argument(
@@ -940,6 +1037,7 @@ def main(argv: list[str] | None = None) -> None:
         matmul_num_warps=args.matmul_num_warps,
         matmul_num_stages=args.matmul_num_stages,
         matmul_input_precision=args.matmul_input_precision,
+        matmul_group_m=args.matmul_group_m,
         include_matmul_sweep=args.include_matmul_sweep,
         matmul_sweep_tile_shapes=_parse_tile_shapes(args.matmul_sweep_tile_shapes),
         matmul_sweep_launch_configs=_parse_launch_configs(args.matmul_sweep_launch_configs),
@@ -949,6 +1047,11 @@ def main(argv: list[str] | None = None) -> None:
         include_matmul_tuning_suite=args.include_matmul_tuning_suite,
         matmul_tuning_shapes=_parse_tile_shapes(args.matmul_tuning_shapes),
         matmul_tuning_configs=_parse_matmul_tuning_configs(args.matmul_tuning_configs),
+        include_matmul_llm_impact_suite=args.include_matmul_llm_impact_suite,
+        matmul_llm_impact_shapes=_parse_tile_shapes(args.matmul_llm_impact_shapes),
+        matmul_llm_impact_configs=_parse_matmul_tuning_configs(
+            args.matmul_llm_impact_configs
+        ),
         include_rmsnorm_shape_sweep=args.include_rmsnorm_shape_sweep,
         rmsnorm_shape_sweep_shapes=_parse_shapes(args.rmsnorm_shape_sweep_shapes),
         rmsnorm_shape_sweep_dtype=args.rmsnorm_shape_sweep_dtype,
@@ -998,6 +1101,7 @@ def _matmul_command(
     num_warps: int,
     num_stages: int,
     input_precision: str,
+    group_m: int = DEFAULT_MATMUL_GROUP_M,
     warmup: int,
     iterations: int,
     output: Path,
@@ -1005,7 +1109,7 @@ def _matmul_command(
     n: int = 1024,
     k: int = 1024,
 ) -> tuple[str, ...]:
-    return (
+    command = [
         "uv",
         "run",
         "benchmark-matmul",
@@ -1033,13 +1137,20 @@ def _matmul_command(
         str(num_stages),
         "--input-precision",
         input_precision,
-        "--warmup",
-        str(warmup),
-        "--iterations",
-        str(iterations),
-        "--output",
-        str(output),
+    ]
+    if group_m != DEFAULT_MATMUL_GROUP_M:
+        command.extend(("--group-m", str(group_m)))
+    command.extend(
+        (
+            "--warmup",
+            str(warmup),
+            "--iterations",
+            str(iterations),
+            "--output",
+            str(output),
+        )
     )
+    return tuple(command)
 
 
 def _decode_step_commands(
@@ -1230,12 +1341,15 @@ def _parse_matmul_tuning_configs(value: str) -> tuple[tuple[int, ...], ...]:
             if not token:
                 continue
             dimensions = tuple(int(part.strip()) for part in token.lower().split("x"))
-            if len(dimensions) != 5:
+            if len(dimensions) == 5:
+                dimensions = (*dimensions, DEFAULT_MATMUL_GROUP_M)
+            elif len(dimensions) != 6:
                 raise ValueError
             configs.append(dimensions)
     except ValueError as exc:
         raise ValueError(
-            "matmul_tuning_configs must be comma-separated MxNxKxWARPSxSTAGES values"
+            "matmul_tuning_configs must be comma-separated "
+            "MxNxKxWARPSxSTAGES[xGROUPM] values"
         ) from exc
     if not configs:
         raise ValueError("matmul_tuning_configs must not be empty")
@@ -1281,15 +1395,24 @@ def _extra_matmul_configs(
     launch_configs: tuple[tuple[int, ...], ...],
     *,
     input_precision: str,
-    baseline_config: tuple[int, int, int, int, int, str],
-) -> tuple[tuple[int, int, int, int, int, str], ...]:
+    baseline_config: tuple[int, int, int, int, int, str, int],
+) -> tuple[tuple[int, int, int, int, int, str, int], ...]:
     seen = {baseline_config}
+    group_m = baseline_config[-1]
     extras = []
     for tile_shape in tile_shapes:
         block_m, block_n, block_k = tile_shape
         for launch_config in launch_configs:
             num_warps, num_stages = launch_config
-            normalized = (block_m, block_n, block_k, num_warps, num_stages, input_precision)
+            normalized = (
+                block_m,
+                block_n,
+                block_k,
+                num_warps,
+                num_stages,
+                input_precision,
+                group_m,
+            )
             if normalized in seen:
                 continue
             extras.append(normalized)
@@ -1359,10 +1482,12 @@ def _join_launch_configs(launch_configs: tuple[tuple[int, int], ...]) -> str:
     return ",".join(f"{num_warps}x{num_stages}" for num_warps, num_stages in launch_configs)
 
 
-def _join_matmul_tuning_configs(configs: tuple[tuple[int, int, int, int, int], ...]) -> str:
+def _join_matmul_tuning_configs(
+    configs: tuple[tuple[int, int, int, int, int, int], ...],
+) -> str:
     return ",".join(
-        f"{block_m}x{block_n}x{block_k}x{num_warps}x{num_stages}"
-        for block_m, block_n, block_k, num_warps, num_stages in configs
+        f"{block_m}x{block_n}x{block_k}x{num_warps}x{num_stages}x{group_m}"
+        for block_m, block_n, block_k, num_warps, num_stages, group_m in configs
     )
 
 
