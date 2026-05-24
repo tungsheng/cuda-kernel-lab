@@ -97,6 +97,11 @@ DECODE_ATTENTION_BACKEND=""
 DECODE_DYNAMIC_COPY_MODE=""
 DECODE_PIECEWISE_POST_MODE=""
 DECODE_ORCHESTRATION_TIMING=""
+MATMUL_AUTOTUNE_SHAPES=""
+MATMUL_AUTOTUNE_DTYPES=""
+MATMUL_AUTOTUNE_CONFIGS=""
+MATMUL_AUTOTUNE_REPEATS=""
+MATMUL_AUTOTUNE_SEED=""
 PROFILE=0
 PROFILE_ONLY=0
 PROFILE_MODE="${CUDA_KERNEL_LAB_PROFILE_MODE:-light}"
@@ -184,6 +189,17 @@ Options:
   --decode-orchestration-timing <mode>
                             Dynamic decode-step orchestration timing: on or off.
                             Default: benchmark-matrix default.
+  --matmul-autotune-shapes <list>
+                            Comma-separated MxNxK shapes passed to h200-matmul-autotune.
+  --matmul-autotune-dtypes <csv>
+                            Comma-separated dtypes passed to h200-matmul-autotune.
+  --matmul-autotune-configs <list>
+                            Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGESxGROUPM
+                            configs passed to h200-matmul-autotune.
+  --matmul-autotune-repeats <n>
+                            Repeated runs per h200-matmul-autotune candidate.
+  --matmul-autotune-seed <n>
+                            Deterministic shuffle seed for h200-matmul-autotune.
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --profile-only            Skip the benchmark matrix and run only Nsight Compute profiles.
   --profile-mode <mode>     Nsight Compute capture mode: light or full. Default: ${PROFILE_MODE}
@@ -322,6 +338,31 @@ parse_args() {
       --decode-orchestration-timing)
         require_value "$1" "${2:-}"
         DECODE_ORCHESTRATION_TIMING=${2:-}
+        shift 2
+        ;;
+      --matmul-autotune-shapes)
+        require_value "$1" "${2:-}"
+        MATMUL_AUTOTUNE_SHAPES=${2:-}
+        shift 2
+        ;;
+      --matmul-autotune-dtypes)
+        require_value "$1" "${2:-}"
+        MATMUL_AUTOTUNE_DTYPES=${2:-}
+        shift 2
+        ;;
+      --matmul-autotune-configs)
+        require_value "$1" "${2:-}"
+        MATMUL_AUTOTUNE_CONFIGS=${2:-}
+        shift 2
+        ;;
+      --matmul-autotune-repeats)
+        require_value "$1" "${2:-}"
+        MATMUL_AUTOTUNE_REPEATS=${2:-}
+        shift 2
+        ;;
+      --matmul-autotune-seed)
+        require_value "$1" "${2:-}"
+        MATMUL_AUTOTUNE_SEED=${2:-}
         shift 2
         ;;
       --with-profiling)
@@ -845,7 +886,9 @@ remote_benchmark_command() {
   if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
     command+=" --only-decode-step"
   else
-    command+=" --include-vector-add-sweep --include-reduction-sweep"
+    if [[ "${SUITE}" != "h200-matmul-autotune" ]]; then
+      command+=" --include-vector-add-sweep --include-reduction-sweep"
+    fi
     if [[ "${INCLUDE_MATMUL}" == "1" ]]; then
       command+=" --include-matmul"
     fi
@@ -888,6 +931,24 @@ remote_benchmark_command() {
   fi
   if [[ -n "${DECODE_ORCHESTRATION_TIMING}" ]]; then
     command+=" --decode-orchestration-timing ${DECODE_ORCHESTRATION_TIMING}"
+  fi
+  if [[ "${SUITE}" == "h200-matmul-autotune" ]]; then
+    command+=" --keep-going"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_SHAPES}" ]]; then
+    command+=" --matmul-autotune-shapes $(shell_quote "${MATMUL_AUTOTUNE_SHAPES}")"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_DTYPES}" ]]; then
+    command+=" --matmul-autotune-dtypes $(shell_quote "${MATMUL_AUTOTUNE_DTYPES}")"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_CONFIGS}" ]]; then
+    command+=" --matmul-autotune-configs $(shell_quote "${MATMUL_AUTOTUNE_CONFIGS}")"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_REPEATS}" ]]; then
+    command+=" --matmul-autotune-repeats ${MATMUL_AUTOTUNE_REPEATS}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_SEED}" ]]; then
+    command+=" --matmul-autotune-seed ${MATMUL_AUTOTUNE_SEED}"
   fi
   if [[ "${SUITE}" == "h200-matmul-autotune" ]]; then
     command+=" && uv run benchmark-autotune --input-dir ${RESULT_DIR} --output ${RESULT_DIR}/h200-matmul-best.json --markdown-output ${RESULT_DIR}/h200-matmul-best.md"
@@ -1395,6 +1456,24 @@ print_plan() {
   fi
   if [[ -n "${DECODE_ORCHESTRATION_TIMING}" ]]; then
     printf '  Decode-step orchestration timing: %s\n' "${DECODE_ORCHESTRATION_TIMING}"
+  fi
+  if [[ "${SUITE}" == "h200-matmul-autotune" ]]; then
+    printf '  Matrix keep-going: enabled\n'
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_SHAPES}" ]]; then
+    printf '  Matmul autotune shapes: %s\n' "${MATMUL_AUTOTUNE_SHAPES}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_DTYPES}" ]]; then
+    printf '  Matmul autotune dtypes: %s\n' "${MATMUL_AUTOTUNE_DTYPES}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_CONFIGS}" ]]; then
+    printf '  Matmul autotune configs: %s\n' "${MATMUL_AUTOTUNE_CONFIGS}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_REPEATS}" ]]; then
+    printf '  Matmul autotune repeats: %s\n' "${MATMUL_AUTOTUNE_REPEATS}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_SEED}" ]]; then
+    printf '  Matmul autotune seed: %s\n' "${MATMUL_AUTOTUNE_SEED}"
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile mode: %s\n' "${PROFILE_MODE}"

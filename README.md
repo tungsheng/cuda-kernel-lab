@@ -133,7 +133,12 @@ uv run benchmark-compare \
 ```
 
 The autotune run writes repeated shuffled rows to `matmul-autotune.jsonl` and
-selects stable winners in `h200-matmul-best.json`.
+selects stable winners in `h200-matmul-best.json`. The default H200 candidate
+set avoids the shared-memory-heavy `block_k=128` tile that exceeds the observed
+H200 per-block shared-memory limit; pass `--matmul-autotune-configs` to
+`scripts/benchmark` when you want to test a custom list. Autotune runs use
+matrix keep-going mode, so an invalid candidate is recorded in
+`benchmark-failures.json` and the remaining candidates still produce a report.
 
 Use `--platform aws` and explicit key arguments only when you need to align with
 an existing EC2 key pair:

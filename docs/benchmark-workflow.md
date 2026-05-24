@@ -239,6 +239,18 @@ fixed seed, and writes a stable-winner manifest into the result directory:
 ./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
 ```
 
+Pass focused candidates through the shell workflow when a live run should answer
+a narrower question:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --suite h200-matmul-autotune \
+  --matmul-autotune-shapes 512x11008x4096 \
+  --matmul-autotune-configs 128x128x64x4x4x4,128x128x64x4x4x8 \
+  --matmul-autotune-repeats 3
+```
+
 Standalone:
 
 ```bash
@@ -277,7 +289,12 @@ also writes `matmul-llm-impact.jsonl`, which compares the asymmetric LLM
 projection shapes across grouped `M` program ordering and shape-specific tile
 choices so H200 runs surface the highest-impact matmul gap directly. The
 H200 matmul autotune suite writes repeated candidates to
-`matmul-autotune.jsonl` and stable winners to `h200-matmul-best.json`. The
+`matmul-autotune.jsonl` and stable winners to `h200-matmul-best.json`. Its
+default candidate list avoids the shared-memory-heavy `block_k=128` tile that
+exceeds the observed H200 per-block shared-memory limit. The shell workflow
+also enables matrix keep-going mode for this suite, writing any failed candidate
+commands to `benchmark-failures.json` so the remaining candidates can still be
+reported and summarized. The
 RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
 The fixed-shape decode-step graph benchmark writes to `decode-step.jsonl`. The

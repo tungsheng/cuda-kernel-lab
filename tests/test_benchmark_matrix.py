@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -264,6 +266,21 @@ def test_h200_matmul_autotune_suite_runs_only_repeated_matmul_candidates() -> No
     assert sum("--group-m 4" in line for line in command_lines) == 2
 
 
+def test_h200_matmul_autotune_defaults_avoid_over_shared_memory_candidate() -> None:
+    entries = benchmark_matrix.build_matrix(
+        suite="h200-matmul-autotune",
+        output_dir=Path("results"),
+        matmul_autotune_shapes=((4096, 4096, 4096),),
+        matmul_autotune_dtypes=("bfloat16",),
+        matmul_autotune_repeats=1,
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert command_lines
+    assert not any("--block-k 128" in line for line in command_lines)
+    assert any("--num-warps 8 --num-stages 4" in line for line in command_lines)
+
+
 def test_matrix_can_include_rmsnorm_shape_sweep() -> None:
     entries = benchmark_matrix.build_matrix(
         output_dir=Path("results"),
@@ -466,6 +483,31 @@ def test_dry_run_can_select_h200_matmul_autotune_suite(
     assert "--m 512 --n 11008 --k 4096 --dtype float16" in output
     assert "--group-m 4" in output
     assert "benchmark-memory" not in output
+
+
+def test_keep_going_records_failed_matrix_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = 0
+
+    def fake_run(command: tuple[str, ...], *, check: bool) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.CalledProcessError(returncode=42, cmd=command)
+
+    monkeypatch.setattr(benchmark_matrix.subprocess, "run", fake_run)
+
+    benchmark_matrix.main(["--output-dir", str(tmp_path), "--keep-going"])
+
+    failure_manifest = json.loads((tmp_path / "benchmark-failures.json").read_text())
+    assert calls == 8
+    assert "continuing" in capsys.readouterr().out
+    assert failure_manifest["kind"] == "benchmark-matrix-failures"
+    assert failure_manifest["failures"][0]["returncode"] == 42
+    assert failure_manifest["failures"][0]["primitive"] == "memory"
 
 
 def test_matrix_rejects_invalid_timing_values() -> None:

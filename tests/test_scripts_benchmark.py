@@ -159,6 +159,12 @@ def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path)
             "test-autotune",
             "--suite",
             "h200-matmul-autotune",
+            "--matmul-autotune-shapes",
+            "512x11008x4096",
+            "--matmul-autotune-configs",
+            "128x128x64x4x4x4,128x128x64x4x4x8",
+            "--matmul-autotune-repeats",
+            "2",
         ],
         cwd=REPO_ROOT,
         capture_output=True,
@@ -172,6 +178,17 @@ def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path)
         in result.stdout
     )
     assert "h200-matmul-autotune" in result.stdout
+    assert "Matrix keep-going: enabled" in result.stdout
+    assert "Matmul autotune shapes: 512x11008x4096" in result.stdout
+    assert (
+        "Matmul autotune configs: 128x128x64x4x4x4,128x128x64x4x4x8"
+        in result.stdout
+    )
+    assert "Matmul autotune repeats: 2" in result.stdout
+    assert "--keep-going" in result.stdout
+    assert "--matmul-autotune-configs" in result.stdout
+    assert "--include-vector-add-sweep" not in result.stdout
+    assert "--include-reduction-sweep" not in result.stdout
     assert "benchmark-autotune" in result.stdout
     assert "h200-matmul-best.json" in result.stdout
     assert "h200-matmul-best.md" in result.stdout

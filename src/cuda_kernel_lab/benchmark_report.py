@@ -106,6 +106,32 @@ def render_markdown(rows: list[ReportRow], *, input_dir: Path) -> str:
     for source in sorted({row.source for row in rows}):
         lines.append(f"- `{source}`")
 
+    failures = _load_failure_manifest(input_dir)
+    if failures:
+        lines.extend(
+            [
+                "",
+                "## Command Failures",
+                "",
+                "| Primitive | Dtype | Return Code | Command |",
+                "| --- | --- | ---: | --- |",
+            ]
+        )
+        for failure in failures:
+            command = failure.get("command")
+            command_label = (
+                " ".join(str(part) for part in command)
+                if isinstance(command, list)
+                else str(command or "")
+            )
+            lines.append(
+                "| "
+                f"{_escape_cell(str(failure.get('primitive') or ''))} | "
+                f"{_escape_cell(str(failure.get('dtype') or ''))} | "
+                f"{failure.get('returncode') or ''} | "
+                f"`{_escape_cell(command_label)}` |"
+            )
+
     first_run = rows[0].run
     lines.extend(
         [
@@ -354,6 +380,17 @@ def _row_from_record(record: dict[str, Any], *, source: Path, line_number: int) 
 
 def _jsonl_paths(input_dir: Path) -> list[Path]:
     return sorted(path for path in input_dir.glob("*.jsonl") if path.is_file())
+
+
+def _load_failure_manifest(input_dir: Path) -> list[dict[str, Any]]:
+    path = input_dir / "benchmark-failures.json"
+    if not path.exists():
+        return []
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    failures = manifest.get("failures")
+    if not isinstance(failures, list):
+        return []
+    return [failure for failure in failures if isinstance(failure, dict)]
 
 
 def _with_speedups(rows: list[ReportRow]) -> list[ReportRow]:

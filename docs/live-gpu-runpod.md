@@ -83,6 +83,20 @@ uv run benchmark-compare \
   --candidate-dir experiments/results/runpod/<run-id>
 ```
 
+Pass a focused candidate set through the same shell workflow when you want to
+retest the remaining H200 matmul gap directly:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --suite h200-matmul-autotune \
+  --matmul-autotune-shapes 512x11008x4096 \
+  --matmul-autotune-configs 128x128x64x4x4x4,128x128x64x4x4x8
+```
+
+Autotune runs continue after an individual candidate failure and write
+`benchmark-failures.json` beside the JSONL results.
+
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:
 

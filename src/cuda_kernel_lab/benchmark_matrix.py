@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import shlex
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_OUTPUT_DIR = Path("experiments/results/runpod/manual-run")
@@ -84,13 +86,15 @@ DEFAULT_MATMUL_AUTOTUNE_SHAPES = (
     (512, 11008, 4096),
 )
 DEFAULT_MATMUL_AUTOTUNE_DTYPES = ("float16", "bfloat16")
+# Keep default H200 candidates under the observed 232448-byte shared-memory limit.
 DEFAULT_MATMUL_AUTOTUNE_CONFIGS = (
     (128, 128, 64, 4, 4, 1),
     (128, 128, 64, 4, 4, 2),
     (128, 128, 64, 4, 4, 4),
     (128, 128, 64, 4, 4, 8),
+    (128, 128, 64, 8, 4, 4),
+    (128, 128, 64, 8, 4, 8),
     (128, 128, 32, 8, 3, 1),
-    (128, 128, 128, 4, 4, 1),
     (64, 128, 64, 4, 4, 1),
     (128, 64, 64, 4, 4, 1),
 )
@@ -150,6 +154,24 @@ class MatrixCommand:
 
     def shell_line(self) -> str:
         return " ".join(shlex.quote(part) for part in self.command)
+
+
+@dataclass(frozen=True)
+class MatrixFailure:
+    """A benchmark matrix command that failed while keep-going mode was enabled."""
+
+    primitive: str
+    dtype: str
+    command: tuple[str, ...]
+    returncode: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "primitive": self.primitive,
+            "dtype": self.dtype,
+            "command": list(self.command),
+            "returncode": self.returncode,
+        }
 
 
 def build_matrix(
@@ -985,6 +1007,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Deterministic shuffle seed for H200 matmul autotune command order.",
     )
     parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help=(
+            "Continue after individual benchmark command failures and write a "
+            "benchmark-failures.json manifest."
+        ),
+    )
+    parser.add_argument(
+        "--failure-output",
+        type=Path,
+        default=None,
+        help="Failure manifest path for --keep-going. Default: output-dir/benchmark-failures.json.",
+    )
+    parser.add_argument(
         "--include-rmsnorm-shape-sweep",
         action="store_true",
         help="Add a focused RMSNorm shape sweep for hidden-size and batch-size evidence.",
@@ -1186,9 +1222,56 @@ def main(argv: list[str] | None = None) -> None:
             print(entry.shell_line())
         return
 
+    failures: list[MatrixFailure] = []
+    successes = 0
     for entry in commands:
         print(entry.shell_line(), flush=True)
-        subprocess.run(entry.command, check=True)
+        try:
+            subprocess.run(entry.command, check=True)
+        except subprocess.CalledProcessError as exc:
+            if not args.keep_going:
+                raise
+            failures.append(
+                MatrixFailure(
+                    primitive=entry.primitive,
+                    dtype=entry.dtype,
+                    command=entry.command,
+                    returncode=exc.returncode,
+                )
+            )
+            print(
+                f"benchmark command failed with return code {exc.returncode}; continuing",
+                flush=True,
+            )
+        else:
+            successes += 1
+
+    if failures:
+        failure_output = args.failure_output or args.output_dir / "benchmark-failures.json"
+        _write_failure_manifest(failure_output, failures)
+        print(f"Wrote benchmark failure manifest to {failure_output}", flush=True)
+        if successes == 0:
+            raise SystemExit(1)
+
+
+def _write_failure_manifest(path: Path, failures: list[MatrixFailure]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "benchmark-matrix-failures",
+                "generated_at_utc": datetime.now(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat(),
+                "failures": [failure.as_dict() for failure in failures],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _matmul_command(

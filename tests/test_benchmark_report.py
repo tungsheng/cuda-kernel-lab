@@ -130,6 +130,49 @@ def test_render_markdown_includes_fastest_and_backend_detail(tmp_path: Path) -> 
     assert "| 2 | 1.067 |" in report
 
 
+def test_render_markdown_includes_matrix_failures(tmp_path: Path) -> None:
+    _write_jsonl(
+        tmp_path / "matmul-autotune.jsonl",
+        [
+            _record(
+                benchmark="matmul",
+                name="triton:matmul",
+                dtype="bfloat16",
+                shape=(4096, 4096, 4096),
+                p50=1.0,
+                p95=1.1,
+                p99=1.2,
+                gbps=100.0,
+                tflops=500.0,
+                args={"block_m": 128, "block_n": 128, "block_k": 64},
+            ),
+        ],
+    )
+    (tmp_path / "benchmark-failures.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "benchmark-matrix-failures",
+                "failures": [
+                    {
+                        "primitive": "matmul",
+                        "dtype": "bfloat16",
+                        "returncode": 1,
+                        "command": ["uv", "run", "benchmark-matmul", "--block-k", "128"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = benchmark_report.load_report_rows(tmp_path)
+    report = benchmark_report.render_markdown(rows, input_dir=tmp_path)
+
+    assert "## Command Failures" in report
+    assert "| matmul | bfloat16 | 1 | `uv run benchmark-matmul --block-k 128` |" in report
+
+
 def test_render_markdown_includes_dynamic_trace_detail(tmp_path: Path) -> None:
     _write_jsonl(
         tmp_path / "decode-step-dynamic-tail.jsonl",
