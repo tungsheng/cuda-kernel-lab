@@ -231,6 +231,35 @@ uv run benchmark-matrix \
 uv run benchmark-report --input-dir experiments/results/runpod/<run-id>
 ```
 
+Use the H200 matmul autotune suite after a roofline run identifies the matmul
+gap. It runs only repeated matmul candidates, shuffles candidate order with a
+fixed seed, and writes a stable-winner manifest into the result directory:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+```
+
+Standalone:
+
+```bash
+uv run benchmark-matrix \
+  --suite h200-matmul-autotune \
+  --output-dir experiments/results/runpod/<run-id>
+uv run benchmark-autotune \
+  --input-dir experiments/results/runpod/<run-id> \
+  --output experiments/results/runpod/<run-id>/h200-matmul-best.json
+```
+
+Compare a candidate run against a previous baseline before promoting a new
+kernel or config:
+
+```bash
+uv run benchmark-compare \
+  --baseline-dir experiments/results/runpod/<baseline-run-id> \
+  --candidate-dir experiments/results/runpod/<run-id> \
+  --max-regression-pct 5
+```
+
 The baseline matrix already captures the default memory block size, `1024`.
 The sweep appends the additional PyTorch and Triton `vector_add` comparison
 runs, `512` and `2048`, to the run's `vector-add-block-size.jsonl`. It also
@@ -247,6 +276,8 @@ square and asymmetric LLM GEMMs that need the most profiler-guided work. It
 also writes `matmul-llm-impact.jsonl`, which compares the asymmetric LLM
 projection shapes across grouped `M` program ordering and shape-specific tile
 choices so H200 runs surface the highest-impact matmul gap directly. The
+H200 matmul autotune suite writes repeated candidates to
+`matmul-autotune.jsonl` and stable winners to `h200-matmul-best.json`. The
 RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
 The fixed-shape decode-step graph benchmark writes to `decode-step.jsonl`. The

@@ -107,13 +107,15 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
 
     assert "Benchmark suite: h200-roofline" in result.stdout
     assert "Profile mode: light" in result.stdout
-    assert "Profile timeout seconds: 600" in result.stdout
+    assert "Profile preset: auto" in result.stdout
+    assert "Profile timeout seconds: 120" in result.stdout
     assert (
         "benchmark-matrix\\ --output-dir\\ experiments/results/runpod/test-run\\ "
         "--suite\\ h200-roofline"
     ) in result.stdout
     assert "matmul-tensor-core-bfloat16" in result.stdout
     assert "matmul-llm-down-bfloat16" in result.stdout
+    assert "memory-vector-add-float32" not in result.stdout
     assert "find_ncu_bin" in result.stdout
     system_path = "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     assert system_path in result.stdout
@@ -122,8 +124,57 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
     assert 'PATH=\\"\\$PATH\\"' in result.stdout
     assert '\\"\\$\\{ncu_bin\\}\\"' in result.stdout
     assert "gpu__time_duration.sum" in result.stdout
-    assert "timeout\\ 600" in result.stdout
+    assert "timeout\\ 120" in result.stdout
     assert "Profile summaries: profiling/reports/test-run" in result.stdout
+
+
+def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path) -> None:
+    connection_file = tmp_path / "runpod.env"
+    connection_file.write_text(
+        "\n".join(
+            [
+                "PROVIDER_PLATFORM=runpod",
+                "RUNPOD_POD_ID=pod123",
+                "RUNPOD_GPU_ID='NVIDIA H200'",
+                "KEY_FILE=/tmp/fake-runpod-key",
+                "SSH_USER=root",
+                "SSH_HOST=203.0.113.10",
+                "SSH_PORT=2222",
+                "REMOTE_DIR=cuda-kernel-lab",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/benchmark",
+            "--dry-run",
+            "--platform",
+            "runpod",
+            "--connection-file",
+            str(connection_file),
+            "--run-id",
+            "test-autotune",
+            "--suite",
+            "h200-matmul-autotune",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert "Benchmark suite: h200-matmul-autotune" in result.stdout
+    assert (
+        "benchmark-matrix\\ --output-dir\\ experiments/results/runpod/test-autotune"
+        in result.stdout
+    )
+    assert "h200-matmul-autotune" in result.stdout
+    assert "benchmark-autotune" in result.stdout
+    assert "h200-matmul-best.json" in result.stdout
+    assert "h200-matmul-best.md" in result.stdout
 
 
 def test_benchmark_dry_run_can_run_profile_only_target(tmp_path: Path) -> None:

@@ -90,9 +90,11 @@ Add focused Nsight Compute profiler captures to a benchmark run:
 ./scripts/benchmark --run-id <run-id> --with-profiling
 ```
 
-Profiling defaults to a lightweight metric set with a per-target timeout. Rerun
-only the profiler for a specific target when the benchmark results already
-exist or a previous profile run timed out:
+Profiling defaults to a lightweight metric set, a `120` second per-target
+timeout, and an automatic target preset. H200 suites default to the
+`matmul-gaps` preset instead of profiling every broad smoke target. Rerun only
+the profiler for a specific target when the benchmark results already exist or
+a previous profile run timed out:
 
 ```bash
 ./scripts/benchmark \
@@ -119,6 +121,19 @@ Runpod bootstrap installs Nsight Compute by default so profiling can preflight
 `ncu` before the benchmark starts. The H200 suite also includes focused matmul
 tuning rows for the square and asymmetric LLM GEMM shapes, plus grouped
 program-ordering rows in `matmul-llm-impact.jsonl`.
+
+Use the H200 autotune suite when the next question is the best stable matmul
+configuration for the measured shapes:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+uv run benchmark-compare \
+  --baseline-dir experiments/results/runpod/<baseline-run-id> \
+  --candidate-dir experiments/results/runpod/<run-id>
+```
+
+The autotune run writes repeated shuffled rows to `matmul-autotune.jsonl` and
+selects stable winners in `h200-matmul-best.json`.
 
 Use `--platform aws` and explicit key arguments only when you need to align with
 an existing EC2 key pair:

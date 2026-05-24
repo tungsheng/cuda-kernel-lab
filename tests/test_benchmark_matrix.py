@@ -235,6 +235,35 @@ def test_h200_roofline_suite_adds_focused_benchmark_tracks() -> None:
     assert any("results/attention.jsonl" in line for line in command_lines)
 
 
+def test_h200_matmul_autotune_suite_runs_only_repeated_matmul_candidates() -> None:
+    entries = benchmark_matrix.build_matrix(
+        suite="h200-matmul-autotune",
+        output_dir=Path("results"),
+        matmul_autotune_shapes=((512, 11008, 4096),),
+        matmul_autotune_dtypes=("float16",),
+        matmul_autotune_configs=((128, 128, 64, 4, 4, 1), (128, 128, 64, 4, 4, 4)),
+        matmul_autotune_repeats=2,
+        matmul_autotune_seed=7,
+    )
+    second_entries = benchmark_matrix.build_matrix(
+        suite="h200-matmul-autotune",
+        output_dir=Path("results"),
+        matmul_autotune_shapes=((512, 11008, 4096),),
+        matmul_autotune_dtypes=("float16",),
+        matmul_autotune_configs=((128, 128, 64, 4, 4, 1), (128, 128, 64, 4, 4, 4)),
+        matmul_autotune_repeats=2,
+        matmul_autotune_seed=7,
+    )
+    command_lines = [entry.shell_line() for entry in entries]
+
+    assert len(entries) == 4
+    assert command_lines == [entry.shell_line() for entry in second_entries]
+    assert all("benchmark-matmul" in line for line in command_lines)
+    assert all("results/matmul-autotune.jsonl" in line for line in command_lines)
+    assert not any("benchmark-memory" in line for line in command_lines)
+    assert sum("--group-m 4" in line for line in command_lines) == 2
+
+
 def test_matrix_can_include_rmsnorm_shape_sweep() -> None:
     entries = benchmark_matrix.build_matrix(
         output_dir=Path("results"),
@@ -409,6 +438,36 @@ def test_dry_run_prints_without_executing(
     assert "results/swiglu.jsonl" in output
 
 
+def test_dry_run_can_select_h200_matmul_autotune_suite(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    benchmark_matrix.main(
+        [
+            "--dry-run",
+            "--suite",
+            "h200-matmul-autotune",
+            "--output-dir",
+            "results",
+            "--matmul-autotune-shapes",
+            "512x11008x4096",
+            "--matmul-autotune-dtypes",
+            "float16",
+            "--matmul-autotune-configs",
+            "128x128x64x4x4x4",
+            "--matmul-autotune-repeats",
+            "2",
+            "--matmul-autotune-seed",
+            "11",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert "results/matmul-autotune.jsonl" in output
+    assert "--m 512 --n 11008 --k 4096 --dtype float16" in output
+    assert "--group-m 4" in output
+    assert "benchmark-memory" not in output
+
+
 def test_matrix_rejects_invalid_timing_values() -> None:
     with pytest.raises(ValueError, match="warmup"):
         benchmark_matrix.build_matrix(warmup=-1)
@@ -460,6 +519,21 @@ def test_matrix_rejects_invalid_timing_values() -> None:
 
     with pytest.raises(ValueError, match="matmul_llm_impact_configs"):
         benchmark_matrix.build_matrix(matmul_llm_impact_configs=((128, 128, 64),))
+
+    with pytest.raises(ValueError, match="matmul_autotune_shapes"):
+        benchmark_matrix.build_matrix(matmul_autotune_shapes=((512, 4096),))
+
+    with pytest.raises(ValueError, match="matmul_autotune_dtypes"):
+        benchmark_matrix.build_matrix(matmul_autotune_dtypes=("float8",))
+
+    with pytest.raises(ValueError, match="matmul_autotune_configs"):
+        benchmark_matrix.build_matrix(matmul_autotune_configs=((128, 128, 64),))
+
+    with pytest.raises(ValueError, match="matmul_autotune_repeats"):
+        benchmark_matrix.build_matrix(matmul_autotune_repeats=0)
+
+    with pytest.raises(ValueError, match="matmul_autotune_seed"):
+        benchmark_matrix.build_matrix(matmul_autotune_seed=-1)
 
     with pytest.raises(ValueError, match="rmsnorm_shape_sweep_shapes"):
         benchmark_matrix.build_matrix(rmsnorm_shape_sweep_shapes=((1024,),))

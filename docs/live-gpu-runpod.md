@@ -59,8 +59,9 @@ suite with profiling:
 
 Runpod bootstrap installs and validates Nsight Compute by default so
 `--with-profiling` can collect `ncu` CSVs. Profiling defaults to a lightweight
-counter set with a timeout; rerun a single target with `--profile-only` when the
-report points to one kernel:
+counter set, a `120` second timeout, and `--profile-preset auto`; H200 suites
+resolve that preset to focused matmul gap targets. Rerun a single target with
+`--profile-only` when the report points to one kernel:
 
 ```bash
 ./scripts/benchmark \
@@ -71,6 +72,16 @@ report points to one kernel:
 ```
 
 Use `./scripts/up --no-install-nsight-compute` only for benchmark-only Pods.
+
+After a roofline run, use the autotune suite to select stable shape-specific
+matmul configs:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+uv run benchmark-compare \
+  --baseline-dir experiments/results/runpod/<baseline-run-id> \
+  --candidate-dir experiments/results/runpod/<run-id>
+```
 
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:

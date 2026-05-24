@@ -24,9 +24,11 @@ the benchmark script collect focused profiles and compact summaries:
 ```
 
 The default profile mode is `light`: it captures the counters used by
-`nsight-summary` and applies a per-target timeout so live runs fail fast enough
-to keep the Pod useful. Use `--profile-mode full` only when a target already
-justifies the longer Nsight Compute collection.
+`nsight-summary` and applies a `120` second per-target timeout so live runs fail
+fast enough to keep the Pod useful. `--profile-preset auto` resolves H200
+Tensor Core suites to `matmul-gaps`, standard suites to `broad`, and
+decode-only runs to `decode`. Use `--profile-mode full` only when a target
+already justifies the longer Nsight Compute collection.
 
 ```bash
 ./scripts/benchmark \
@@ -42,7 +44,8 @@ specific kernel gap.
 
 For H200 Tensor Core/roofline evidence, use the named suite. This adds larger
 FP16/BF16 matmul rows, LLM-shape tuning rows, grouped-impact rows, and extra
-matmul profile targets for Tensor Core counters:
+matmul profile targets for Tensor Core counters. The automatic profile preset
+captures only the matmul gap targets for this suite:
 
 ```bash
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling

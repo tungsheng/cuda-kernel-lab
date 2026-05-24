@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from pathlib import Path
 
 DEFAULT_OUTPUT_DIR = Path("experiments/results/runpod/manual-run")
 DEFAULT_SUITE = "standard"
-SUITES = ("standard", "h200-roofline", "tensor-core")
+SUITES = ("standard", "h200-roofline", "h200-matmul-autotune", "tensor-core")
 DEFAULT_WARMUP = 25
 DEFAULT_ITERATIONS = 100
 DEFAULT_MEMORY_BLOCK_SIZE = 1024
@@ -77,6 +78,24 @@ DEFAULT_MATMUL_LLM_IMPACT_CONFIGS = (
     (128, 64, 64, 4, 4, 4),
     (32, 256, 64, 4, 4, 4),
 )
+DEFAULT_MATMUL_AUTOTUNE_SHAPES = (
+    (4096, 4096, 4096),
+    (512, 4096, 11008),
+    (512, 11008, 4096),
+)
+DEFAULT_MATMUL_AUTOTUNE_DTYPES = ("float16", "bfloat16")
+DEFAULT_MATMUL_AUTOTUNE_CONFIGS = (
+    (128, 128, 64, 4, 4, 1),
+    (128, 128, 64, 4, 4, 2),
+    (128, 128, 64, 4, 4, 4),
+    (128, 128, 64, 4, 4, 8),
+    (128, 128, 32, 8, 3, 1),
+    (128, 128, 128, 4, 4, 1),
+    (64, 128, 64, 4, 4, 1),
+    (128, 64, 64, 4, 4, 1),
+)
+DEFAULT_MATMUL_AUTOTUNE_REPEATS = 3
+DEFAULT_MATMUL_AUTOTUNE_SEED = 20260524
 DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES = (
     (512, 1024),
     (1024, 2048),
@@ -164,6 +183,12 @@ def build_matrix(
     matmul_llm_impact_configs: tuple[
         tuple[int, ...], ...
     ] = DEFAULT_MATMUL_LLM_IMPACT_CONFIGS,
+    include_matmul_autotune_suite: bool = False,
+    matmul_autotune_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_AUTOTUNE_SHAPES,
+    matmul_autotune_dtypes: tuple[str, ...] = DEFAULT_MATMUL_AUTOTUNE_DTYPES,
+    matmul_autotune_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_AUTOTUNE_CONFIGS,
+    matmul_autotune_repeats: int = DEFAULT_MATMUL_AUTOTUNE_REPEATS,
+    matmul_autotune_seed: int = DEFAULT_MATMUL_AUTOTUNE_SEED,
     include_rmsnorm_shape_sweep: bool = False,
     rmsnorm_shape_sweep_shapes: tuple[tuple[int, ...], ...] = DEFAULT_RMSNORM_SHAPE_SWEEP_SHAPES,
     rmsnorm_shape_sweep_dtype: str = DEFAULT_RMSNORM_SHAPE_SWEEP_DTYPE,
@@ -208,6 +233,8 @@ def build_matrix(
     if suite == "h200-roofline":
         include_matmul_tuning_suite = True
         include_matmul_llm_impact_suite = True
+    if suite == "h200-matmul-autotune":
+        include_matmul_autotune_suite = True
 
     if warmup < 0:
         raise ValueError("warmup must be non-negative")
@@ -257,6 +284,22 @@ def build_matrix(
         )
     if any(any(dim <= 0 for dim in config) for config in matmul_llm_impact_configs):
         raise ValueError("matmul_llm_impact_configs must be positive")
+    if any(len(shape) != 3 for shape in matmul_autotune_shapes):
+        raise ValueError("matmul_autotune_shapes must be MxNxK triples")
+    if any(any(dim <= 0 for dim in shape) for shape in matmul_autotune_shapes):
+        raise ValueError("matmul_autotune_shapes must be positive")
+    if not matmul_autotune_dtypes:
+        raise ValueError("matmul_autotune_dtypes must not be empty")
+    if any(dtype not in SUPPORTED_DTYPES for dtype in matmul_autotune_dtypes):
+        raise ValueError("matmul_autotune_dtypes must be one of float32, float16, bfloat16")
+    if any(len(config) != 6 for config in matmul_autotune_configs):
+        raise ValueError("matmul_autotune_configs must be MxNxKxWARPSxSTAGESxGROUPM values")
+    if any(any(dim <= 0 for dim in config) for config in matmul_autotune_configs):
+        raise ValueError("matmul_autotune_configs must be positive")
+    if matmul_autotune_repeats <= 0:
+        raise ValueError("matmul_autotune_repeats must be positive")
+    if matmul_autotune_seed < 0:
+        raise ValueError("matmul_autotune_seed must be non-negative")
     if any(len(shape) != 2 for shape in rmsnorm_shape_sweep_shapes):
         raise ValueError("rmsnorm_shape_sweep_shapes must be ROWSxCOLS pairs")
     if any(any(dim <= 0 for dim in shape) for shape in rmsnorm_shape_sweep_shapes):
@@ -300,6 +343,7 @@ def build_matrix(
         raise ValueError("reduction_sweep_strategies must be one of iterative, two_pass")
 
     commands: list[MatrixCommand] = []
+    include_standard_core = suite != "h200-matmul-autotune"
     matmul_baseline_config = (
         matmul_block_m,
         matmul_block_n,
@@ -309,7 +353,7 @@ def build_matrix(
         matmul_input_precision,
         matmul_group_m,
     )
-    if not only_decode_step:
+    if include_standard_core and not only_decode_step:
         for dtype in DTYPES:
             commands.append(
                 MatrixCommand(
@@ -652,6 +696,20 @@ def build_matrix(
                             ),
                         )
                     )
+    if include_matmul_autotune_suite and not only_decode_step:
+        commands.extend(
+            _matmul_autotune_commands(
+                device=device,
+                output_dir=output_dir,
+                warmup=warmup,
+                iterations=iterations,
+                shapes=matmul_autotune_shapes,
+                dtypes=matmul_autotune_dtypes,
+                configs=matmul_autotune_configs,
+                repeats=matmul_autotune_repeats,
+                seed=matmul_autotune_seed,
+            )
+        )
     if include_rmsnorm_shape_sweep and not only_decode_step:
         for rows, cols in rmsnorm_shape_sweep_shapes:
             commands.append(
@@ -770,7 +828,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_SUITE,
         help=(
             "Benchmark suite preset. h200-roofline and tensor-core add larger "
-            "matmul, BF16, RMSNorm shape, and attention baseline coverage."
+            "matmul, BF16, RMSNorm shape, and attention baseline coverage. "
+            "h200-matmul-autotune runs repeated shuffled matmul candidates."
         ),
     )
     parser.add_argument(
@@ -889,6 +948,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGESxGROUPM configs for "
             "--include-matmul-llm-impact-suite."
         ),
+    )
+    parser.add_argument(
+        "--include-matmul-autotune-suite",
+        action="store_true",
+        help="Add repeated H200 matmul autotune rows with deterministic shuffled order.",
+    )
+    parser.add_argument(
+        "--matmul-autotune-shapes",
+        default=_join_tile_shapes(DEFAULT_MATMUL_AUTOTUNE_SHAPES),
+        help="Comma-separated MxNxK shapes for --include-matmul-autotune-suite.",
+    )
+    parser.add_argument(
+        "--matmul-autotune-dtypes",
+        default=_join_values(DEFAULT_MATMUL_AUTOTUNE_DTYPES),
+        help="Comma-separated dtypes for --include-matmul-autotune-suite.",
+    )
+    parser.add_argument(
+        "--matmul-autotune-configs",
+        default=_join_matmul_tuning_configs(DEFAULT_MATMUL_AUTOTUNE_CONFIGS),
+        help=(
+            "Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGESxGROUPM configs for "
+            "--include-matmul-autotune-suite."
+        ),
+    )
+    parser.add_argument(
+        "--matmul-autotune-repeats",
+        type=int,
+        default=DEFAULT_MATMUL_AUTOTUNE_REPEATS,
+        help="Number of repeated runs per H200 matmul autotune candidate.",
+    )
+    parser.add_argument(
+        "--matmul-autotune-seed",
+        type=int,
+        default=DEFAULT_MATMUL_AUTOTUNE_SEED,
+        help="Deterministic shuffle seed for H200 matmul autotune command order.",
     )
     parser.add_argument(
         "--include-rmsnorm-shape-sweep",
@@ -1052,6 +1146,12 @@ def main(argv: list[str] | None = None) -> None:
         matmul_llm_impact_configs=_parse_matmul_tuning_configs(
             args.matmul_llm_impact_configs
         ),
+        include_matmul_autotune_suite=args.include_matmul_autotune_suite,
+        matmul_autotune_shapes=_parse_tile_shapes(args.matmul_autotune_shapes),
+        matmul_autotune_dtypes=_parse_values(args.matmul_autotune_dtypes),
+        matmul_autotune_configs=_parse_matmul_tuning_configs(args.matmul_autotune_configs),
+        matmul_autotune_repeats=args.matmul_autotune_repeats,
+        matmul_autotune_seed=args.matmul_autotune_seed,
         include_rmsnorm_shape_sweep=args.include_rmsnorm_shape_sweep,
         rmsnorm_shape_sweep_shapes=_parse_shapes(args.rmsnorm_shape_sweep_shapes),
         rmsnorm_shape_sweep_dtype=args.rmsnorm_shape_sweep_dtype,
@@ -1151,6 +1251,58 @@ def _matmul_command(
         )
     )
     return tuple(command)
+
+
+def _matmul_autotune_commands(
+    *,
+    device: str,
+    output_dir: Path,
+    warmup: int,
+    iterations: int,
+    shapes: tuple[tuple[int, ...], ...],
+    dtypes: tuple[str, ...],
+    configs: tuple[tuple[int, ...], ...],
+    repeats: int,
+    seed: int,
+) -> tuple[MatrixCommand, ...]:
+    commands: list[MatrixCommand] = []
+    for _repeat in range(repeats):
+        for dtype in dtypes:
+            for m, n, k in shapes:
+                for (
+                    block_m,
+                    block_n,
+                    block_k,
+                    num_warps,
+                    num_stages,
+                    group_m,
+                ) in configs:
+                    commands.append(
+                        MatrixCommand(
+                            primitive="matmul",
+                            dtype=dtype,
+                            command=_matmul_command(
+                                device=device,
+                                dtype=dtype,
+                                block_m=block_m,
+                                block_n=block_n,
+                                block_k=block_k,
+                                num_warps=num_warps,
+                                num_stages=num_stages,
+                                input_precision="tf32",
+                                group_m=group_m,
+                                warmup=warmup,
+                                iterations=iterations,
+                                output=output_dir / "matmul-autotune.jsonl",
+                                m=m,
+                                n=n,
+                                k=k,
+                            ),
+                        )
+                    )
+
+    random.Random(seed).shuffle(commands)
+    return tuple(commands)
 
 
 def _decode_step_commands(
@@ -1294,7 +1446,9 @@ def _parse_block_sizes(value: str) -> tuple[int, ...]:
 
 def _normalize_suite(value: str) -> str:
     if value not in SUITES:
-        raise ValueError("suite must be one of standard, h200-roofline, tensor-core")
+        raise ValueError(
+            "suite must be one of standard, h200-roofline, h200-matmul-autotune, tensor-core"
+        )
     return value
 
 

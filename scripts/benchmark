@@ -100,7 +100,8 @@ DECODE_ORCHESTRATION_TIMING=""
 PROFILE=0
 PROFILE_ONLY=0
 PROFILE_MODE="${CUDA_KERNEL_LAB_PROFILE_MODE:-light}"
-PROFILE_TIMEOUT_SECONDS="${CUDA_KERNEL_LAB_PROFILE_TIMEOUT_SECONDS:-600}"
+PROFILE_PRESET="${CUDA_KERNEL_LAB_PROFILE_PRESET:-auto}"
+PROFILE_TIMEOUT_SECONDS="${CUDA_KERNEL_LAB_PROFILE_TIMEOUT_SECONDS:-120}"
 PROFILE_TARGETS="${CUDA_KERNEL_LAB_PROFILE_TARGETS:-}"
 DRY_RUN=0
 
@@ -146,7 +147,8 @@ experiments.
 
 Options:
   --platform <name>         Provider platform: runpod or aws. Default: ${PLATFORM}
-  --suite <name>            Benchmark suite: standard, h200-roofline, or tensor-core.
+  --suite <name>            Benchmark suite: standard, h200-roofline,
+                            h200-matmul-autotune, or tensor-core.
                             Default: ${SUITE}
   --run-id <id>             Result run id. Default: UTC timestamp.
   --key-file <path>         SSH private key. Default: connection metadata.
@@ -185,6 +187,8 @@ Options:
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --profile-only            Skip the benchmark matrix and run only Nsight Compute profiles.
   --profile-mode <mode>     Nsight Compute capture mode: light or full. Default: ${PROFILE_MODE}
+  --profile-preset <name>   Profile target preset: auto, matmul-gaps, broad, or decode.
+                            Default: ${PROFILE_PRESET}
   --profile-timeout-seconds <n>
                             Per-target Nsight timeout. Use 0 to disable. Default: ${PROFILE_TIMEOUT_SECONDS}
   --profile-targets <csv>   Comma-separated profile target names. Default: suite-specific set.
@@ -334,6 +338,11 @@ parse_args() {
         PROFILE_MODE=${2:-}
         shift 2
         ;;
+      --profile-preset)
+        require_value "$1" "${2:-}"
+        PROFILE_PRESET=${2:-}
+        shift 2
+        ;;
       --profile-timeout-seconds)
         require_value "$1" "${2:-}"
         PROFILE_TIMEOUT_SECONDS=${2:-}
@@ -415,10 +424,10 @@ validate_platform() {
 
 validate_suite() {
   case "${SUITE}" in
-    standard|h200-roofline|tensor-core)
+    standard|h200-roofline|h200-matmul-autotune|tensor-core)
       ;;
     *)
-      die "--suite must be one of: standard, h200-roofline, tensor-core"
+      die "--suite must be one of: standard, h200-roofline, h200-matmul-autotune, tensor-core"
       ;;
   esac
 }
@@ -652,6 +661,14 @@ validate_profile_options() {
       ;;
   esac
 
+  case "${PROFILE_PRESET}" in
+    auto|matmul-gaps|broad|decode)
+      ;;
+    *)
+      die "--profile-preset must be one of: auto, matmul-gaps, broad, decode"
+      ;;
+  esac
+
   validate_non_negative_integer "--profile-timeout-seconds" "${PROFILE_TIMEOUT_SECONDS}"
 
   if [[ -n "${PROFILE_TARGETS}" ]]; then
@@ -871,6 +888,9 @@ remote_benchmark_command() {
   fi
   if [[ -n "${DECODE_ORCHESTRATION_TIMING}" ]]; then
     command+=" --decode-orchestration-timing ${DECODE_ORCHESTRATION_TIMING}"
+  fi
+  if [[ "${SUITE}" == "h200-matmul-autotune" ]]; then
+    command+=" && uv run benchmark-autotune --input-dir ${RESULT_DIR} --output ${RESULT_DIR}/h200-matmul-best.json --markdown-output ${RESULT_DIR}/h200-matmul-best.md"
   fi
   command+=" && uv run benchmark-report --input-dir ${RESULT_DIR} --output ${REPORT_PATH}"
 
@@ -1175,6 +1195,7 @@ profile_case_command() {
 remote_profile_command() {
   local command
   local ncu_args
+  local resolved_preset
   local target
   local targets
 
@@ -1223,15 +1244,28 @@ remote_profile_command() {
   targets=()
   if [[ -n "${PROFILE_TARGETS}" ]]; then
     IFS=',' read -r -a targets <<< "${PROFILE_TARGETS}"
-  elif [[ "${ONLY_DECODE_STEP}" != "1" ]]; then
-    targets+=(
-      memory-vector-add-float32
-      memory-reduction-iterative-float32
-      memory-reduction-two-pass-float32
-      norms-rmsnorm-float16
-      matmul-tiled-float16
-    )
-    if [[ "${SUITE}" == "h200-roofline" || "${SUITE}" == "tensor-core" ]]; then
+  else
+    resolved_preset="${PROFILE_PRESET}"
+    if [[ "${resolved_preset}" == "auto" ]]; then
+      if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
+        resolved_preset="decode"
+      elif [[ "${SUITE}" == "h200-roofline" || "${SUITE}" == "h200-matmul-autotune" || "${SUITE}" == "tensor-core" ]]; then
+        resolved_preset="matmul-gaps"
+      else
+        resolved_preset="broad"
+      fi
+    fi
+
+    if [[ "${resolved_preset}" == "broad" && "${ONLY_DECODE_STEP}" != "1" ]]; then
+      targets+=(
+        memory-vector-add-float32
+        memory-reduction-iterative-float32
+        memory-reduction-two-pass-float32
+        norms-rmsnorm-float16
+        matmul-tiled-float16
+      )
+    fi
+    if [[ "${resolved_preset}" == "matmul-gaps" || ( "${resolved_preset}" == "broad" && ( "${SUITE}" == "h200-roofline" || "${SUITE}" == "h200-matmul-autotune" || "${SUITE}" == "tensor-core" ) ) ]]; then
       targets+=(
         matmul-tensor-core-float16
         matmul-tensor-core-bfloat16
@@ -1239,19 +1273,19 @@ remote_profile_command() {
         matmul-llm-down-bfloat16
       )
     fi
-  fi
-  if [[ -z "${PROFILE_TARGETS}" && ( "${INCLUDE_DECODE_STEP}" == "1" || "${ONLY_DECODE_STEP}" == "1" ) ]]; then
-    targets+=(
-      decode-step-naive-eager-float16
-      decode-step-fused-eager-float16
-      decode-step-naive-graph-float16
-      decode-step-fused-graph-float16
-      decode-step-fused-piecewise-graph-float16
-      decode-step-fused-piecewise-graph-same-stream-float16
-      decode-step-dynamic-eager-float16
-      decode-step-dynamic-piecewise-graph-float16
-      decode-step-dynamic-piecewise-graph-same-stream-float16
-    )
+    if [[ "${resolved_preset}" == "decode" || ( "${resolved_preset}" == "broad" && ( "${INCLUDE_DECODE_STEP}" == "1" || "${ONLY_DECODE_STEP}" == "1" ) ) ]]; then
+      targets+=(
+        decode-step-naive-eager-float16
+        decode-step-fused-eager-float16
+        decode-step-naive-graph-float16
+        decode-step-fused-graph-float16
+        decode-step-fused-piecewise-graph-float16
+        decode-step-fused-piecewise-graph-same-stream-float16
+        decode-step-dynamic-eager-float16
+        decode-step-dynamic-piecewise-graph-float16
+        decode-step-dynamic-piecewise-graph-same-stream-float16
+      )
+    fi
   fi
 
   for target in "${targets[@]}"; do
@@ -1364,6 +1398,7 @@ print_plan() {
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile mode: %s\n' "${PROFILE_MODE}"
+    printf '  Profile preset: %s\n' "${PROFILE_PRESET}"
     printf '  Profile timeout seconds: %s\n' "${PROFILE_TIMEOUT_SECONDS}"
     if [[ -n "${PROFILE_TARGETS}" ]]; then
       printf '  Profile targets: %s\n' "${PROFILE_TARGETS}"
@@ -1460,6 +1495,10 @@ print_complete() {
   if [[ "${PROFILE_ONLY}" != "1" ]]; then
     printf '  Raw results: %s\n' "${RESULT_DIR}"
     printf '  Report: %s\n' "${REPORT_PATH}"
+    if [[ "${SUITE}" == "h200-matmul-autotune" ]]; then
+      printf '  Autotune manifest: %s\n' "${RESULT_DIR}/h200-matmul-best.json"
+      printf '  Autotune summary: %s\n' "${RESULT_DIR}/h200-matmul-best.md"
+    fi
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"
