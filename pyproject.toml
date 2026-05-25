@@ -28,6 +28,7 @@ benchmark-swiglu = "cuda_kernel_lab.benchmarks.swiglu:main"
 benchmark-autotune = "cuda_kernel_lab.benchmark_autotune:main"
 benchmark-compare = "cuda_kernel_lab.benchmark_compare:main"
 benchmark-matrix = "cuda_kernel_lab.benchmark_matrix:main"
+benchmark-profile-plan = "cuda_kernel_lab.benchmark_profile_plan:main"
 benchmark-report = "cuda_kernel_lab.benchmark_report:main"
 nsight-summary = "cuda_kernel_lab.nsight_summary:main"
 

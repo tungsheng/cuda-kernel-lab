@@ -26,9 +26,10 @@ the benchmark script collect focused profiles and compact summaries:
 The default profile mode is `light`: it captures the counters used by
 `nsight-summary` and applies a `120` second per-target timeout so live runs fail
 fast enough to keep the Pod useful. `--profile-preset auto` resolves H200
-Tensor Core suites to `matmul-gaps`, standard suites to `broad`, and
-decode-only runs to `decode`. Use `--profile-mode full` only when a target
-already justifies the longer Nsight Compute collection.
+roofline and Tensor Core suites to `matmul-gaps`, H200 autotune suites to
+`autotune-winners`, standard suites to `broad`, and decode-only runs to
+`decode`. Use `--profile-mode full` only when a target already justifies the
+longer Nsight Compute collection.
 
 ```bash
 ./scripts/benchmark \
@@ -49,6 +50,24 @@ captures only the matmul gap targets for this suite:
 
 ```bash
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
+```
+
+For H200 autotune evidence, `--with-profiling` profiles the stable winners
+selected in `experiments/results/runpod/<run-id>/h200-matmul-best.json`:
+
+```bash
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune --with-profiling
+```
+
+When the benchmark already exists, rerun only winner profiles by pointing to the
+manifest explicitly:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --profile-only \
+  --profile-preset autotune-winners \
+  --profile-autotune-manifest experiments/results/runpod/<run-id>/h200-matmul-best.json
 ```
 
 `scripts/benchmark --with-profiling` checks for `ncu` before running the matrix.

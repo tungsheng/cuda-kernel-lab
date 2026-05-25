@@ -60,8 +60,9 @@ suite with profiling:
 Runpod bootstrap installs and validates Nsight Compute by default so
 `--with-profiling` can collect `ncu` CSVs. Profiling defaults to a lightweight
 counter set, a `120` second timeout, and `--profile-preset auto`; H200 suites
-resolve that preset to focused matmul gap targets. Rerun a single target with
-`--profile-only` when the report points to one kernel:
+resolve that preset to focused matmul gap targets for roofline runs and the
+stable autotune winners for `h200-matmul-autotune` runs. Rerun a single target
+with `--profile-only` when the report points to one kernel:
 
 ```bash
 ./scripts/benchmark \
@@ -77,10 +78,22 @@ After a roofline run, use the autotune suite to select stable shape-specific
 matmul configs:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune --with-profiling
 uv run benchmark-compare \
   --baseline-dir experiments/results/runpod/<baseline-run-id> \
   --candidate-dir experiments/results/runpod/<run-id>
+```
+
+The profile phase reads the run's `h200-matmul-best.json` and profiles those
+exact winner parameters, so the Nsight reports explain the selected configs
+rather than the older fixed matmul probes. To replay only those profiles:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --profile-only \
+  --profile-preset autotune-winners \
+  --profile-autotune-manifest experiments/results/runpod/<run-id>/h200-matmul-best.json
 ```
 
 Pass a focused candidate set through the same shell workflow when you want to

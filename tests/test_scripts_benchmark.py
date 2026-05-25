@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -247,6 +248,83 @@ def test_benchmark_dry_run_can_run_profile_only_target(tmp_path: Path) -> None:
     assert "--set" in result.stdout
     assert "full" in result.stdout
     assert "timeout\\ 120" in result.stdout
+
+
+def test_benchmark_dry_run_profiles_autotune_winners(tmp_path: Path) -> None:
+    connection_file = tmp_path / "runpod.env"
+    connection_file.write_text(
+        "\n".join(
+            [
+                "PROVIDER_PLATFORM=runpod",
+                "RUNPOD_POD_ID=pod123",
+                "RUNPOD_GPU_ID='NVIDIA H200'",
+                "KEY_FILE=/tmp/fake-runpod-key",
+                "SSH_USER=root",
+                "SSH_HOST=203.0.113.10",
+                "SSH_PORT=2222",
+                "REMOTE_DIR=cuda-kernel-lab",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "h200-matmul-best.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "winners": [
+                    {
+                        "dtype": "bfloat16",
+                        "shape": [512, 11008, 4096],
+                        "parameters": {
+                            "block_m": 128,
+                            "block_n": 128,
+                            "block_k": 64,
+                            "num_warps": 8,
+                            "num_stages": 4,
+                            "group_m": 8,
+                            "input_precision": "tf32",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/benchmark",
+            "--dry-run",
+            "--platform",
+            "runpod",
+            "--connection-file",
+            str(connection_file),
+            "--run-id",
+            "test-profile-winners",
+            "--profile-only",
+            "--profile-preset",
+            "autotune-winners",
+            "--profile-autotune-manifest",
+            str(manifest),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    target = (
+        "matmul-autotune-bfloat16-512x11008x4096-"
+        "bm128-bn128-bk64-w8-s4-gm8-iptf32"
+    )
+    assert "Profile preset: autotune-winners" in result.stdout
+    assert f"Profile autotune manifest: {manifest}" in result.stdout
+    assert target in result.stdout
+    assert "--num-warps" in result.stdout
+    assert "--num-stages" in result.stdout
+    assert "--group-m" in result.stdout
+    assert "triton-autotune-block-128x128x64-warps-8-stages-4-groupm-8" in result.stdout
 
 
 def test_benchmark_dry_run_preserves_aws_connection(tmp_path: Path) -> None:

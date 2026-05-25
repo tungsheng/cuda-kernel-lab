@@ -108,6 +108,7 @@ PROFILE_MODE="${CUDA_KERNEL_LAB_PROFILE_MODE:-light}"
 PROFILE_PRESET="${CUDA_KERNEL_LAB_PROFILE_PRESET:-auto}"
 PROFILE_TIMEOUT_SECONDS="${CUDA_KERNEL_LAB_PROFILE_TIMEOUT_SECONDS:-120}"
 PROFILE_TARGETS="${CUDA_KERNEL_LAB_PROFILE_TARGETS:-}"
+PROFILE_AUTOTUNE_MANIFEST="${CUDA_KERNEL_LAB_PROFILE_AUTOTUNE_MANIFEST:-}"
 DRY_RUN=0
 
 KEY_FILE_SET=0
@@ -203,11 +204,15 @@ Options:
   --with-profiling          Capture focused Nsight Compute CSV and Markdown summaries.
   --profile-only            Skip the benchmark matrix and run only Nsight Compute profiles.
   --profile-mode <mode>     Nsight Compute capture mode: light or full. Default: ${PROFILE_MODE}
-  --profile-preset <name>   Profile target preset: auto, matmul-gaps, broad, or decode.
+  --profile-preset <name>   Profile target preset: auto, autotune-winners,
+                            matmul-gaps, broad, or decode.
                             Default: ${PROFILE_PRESET}
   --profile-timeout-seconds <n>
                             Per-target Nsight timeout. Use 0 to disable. Default: ${PROFILE_TIMEOUT_SECONDS}
   --profile-targets <csv>   Comma-separated profile target names. Default: suite-specific set.
+  --profile-autotune-manifest <path>
+                            Autotune winner manifest for --profile-preset autotune-winners.
+                            Default: <output-root>/<run-id>/h200-matmul-best.json.
   --output-root <path>      Raw JSONL root. Default: provider-specific.
   --report-root <path>      Markdown report root. Default: provider-specific.
   --ssh-user <name>         SSH user. Default: ${SSH_USER}
@@ -392,6 +397,11 @@ parse_args() {
       --profile-targets)
         require_value "$1" "${2:-}"
         PROFILE_TARGETS=${2:-}
+        shift 2
+        ;;
+      --profile-autotune-manifest)
+        require_value "$1" "${2:-}"
+        PROFILE_AUTOTUNE_MANIFEST=$(absolute_path "${2:-}")
         shift 2
         ;;
       --output-root)
@@ -680,6 +690,10 @@ validate_decode_tail_options() {
 }
 
 is_profile_target() {
+  if is_autotune_profile_target "$1"; then
+    return 0
+  fi
+
   case "$1" in
     memory-vector-add-float32|memory-reduction-iterative-float32|memory-reduction-two-pass-float32|norms-rmsnorm-float16|matmul-tiled-float16|matmul-tensor-core-float16|matmul-tensor-core-bfloat16|matmul-llm-up-bfloat16|matmul-llm-down-bfloat16|decode-step-naive-eager-float16|decode-step-fused-eager-float16|decode-step-naive-graph-float16|decode-step-fused-graph-float16|decode-step-fused-piecewise-graph-float16|decode-step-fused-piecewise-graph-same-stream-float16|decode-step-dynamic-eager-float16|decode-step-dynamic-piecewise-graph-float16|decode-step-dynamic-piecewise-graph-same-stream-float16)
       return 0
@@ -688,6 +702,10 @@ is_profile_target() {
       return 1
       ;;
   esac
+}
+
+is_autotune_profile_target() {
+  [[ "$1" =~ ^matmul-autotune-(float16|bfloat16|float32)-([0-9]+)x([0-9]+)x([0-9]+)-bm([0-9]+)-bn([0-9]+)-bk([0-9]+)-w([0-9]+)-s([0-9]+)-gm([0-9]+)-ip(tf32|tf32x3|ieee)$ ]]
 }
 
 validate_profile_options() {
@@ -703,10 +721,10 @@ validate_profile_options() {
   esac
 
   case "${PROFILE_PRESET}" in
-    auto|matmul-gaps|broad|decode)
+    auto|autotune-winners|matmul-gaps|broad|decode)
       ;;
     *)
-      die "--profile-preset must be one of: auto, matmul-gaps, broad, decode"
+      die "--profile-preset must be one of: auto, autotune-winners, matmul-gaps, broad, decode"
       ;;
   esac
 
@@ -817,6 +835,30 @@ print_command() {
 
 shell_quote() {
   printf '%q' "$1"
+}
+
+profile_autotune_manifest_path() {
+  if [[ -n "${PROFILE_AUTOTUNE_MANIFEST}" ]]; then
+    printf '%s\n' "${PROFILE_AUTOTUNE_MANIFEST}"
+  else
+    printf '%s/%s/h200-matmul-best.json\n' "${REPO_ROOT}" "${RESULT_DIR}"
+  fi
+}
+
+autotune_profile_targets() {
+  local manifest
+
+  manifest=$(profile_autotune_manifest_path)
+  if [[ ! -f "${manifest}" ]]; then
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      printf '%s\n' \
+        "matmul-autotune-bfloat16-512x11008x4096-bm128-bn128-bk64-w8-s4-gm8-iptf32"
+      return
+    fi
+    die "missing autotune winner manifest: ${manifest}; run the h200-matmul-autotune benchmark first or pass --profile-autotune-manifest"
+  fi
+
+  uv run benchmark-profile-plan --manifest "${manifest}"
 }
 
 remote_ncu_finder_command() {
@@ -974,6 +1016,23 @@ remote_profile_preflight_command() {
 profile_benchmark_command() {
   local target=$1
 
+  if is_autotune_profile_target "${target}"; then
+    local dtype=${BASH_REMATCH[1]}
+    local m=${BASH_REMATCH[2]}
+    local n=${BASH_REMATCH[3]}
+    local k=${BASH_REMATCH[4]}
+    local block_m=${BASH_REMATCH[5]}
+    local block_n=${BASH_REMATCH[6]}
+    local block_k=${BASH_REMATCH[7]}
+    local num_warps=${BASH_REMATCH[8]}
+    local num_stages=${BASH_REMATCH[9]}
+    local group_m=${BASH_REMATCH[10]}
+    local input_precision=${BASH_REMATCH[11]}
+    printf '%s\n' \
+      "uv run benchmark-matmul --backend triton --device cuda --m ${m} --n ${n} --k ${k} --dtype ${dtype} --block-m ${block_m} --block-n ${block_n} --block-k ${block_k} --num-warps ${num_warps} --num-stages ${num_stages} --input-precision ${input_precision} --group-m ${group_m} --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/${target}.jsonl"
+    return
+  fi
+
   case "${target}" in
     memory-vector-add-float32)
       printf '%s\n' \
@@ -1056,6 +1115,22 @@ profile_benchmark_command() {
 profile_title() {
   local target=$1
 
+  if is_autotune_profile_target "${target}"; then
+    local dtype=${BASH_REMATCH[1]}
+    local m=${BASH_REMATCH[2]}
+    local n=${BASH_REMATCH[3]}
+    local k=${BASH_REMATCH[4]}
+    local block_m=${BASH_REMATCH[5]}
+    local block_n=${BASH_REMATCH[6]}
+    local block_k=${BASH_REMATCH[7]}
+    local num_warps=${BASH_REMATCH[8]}
+    local num_stages=${BASH_REMATCH[9]}
+    local group_m=${BASH_REMATCH[10]}
+    printf '%s\n' \
+      "${PROFILE_DEVICE_LABEL} autotune winner ${dtype} ${m}x${n}x${k} block ${block_m}x${block_n}x${block_k} warps ${num_warps} stages ${num_stages} group_m ${group_m} profile"
+    return
+  fi
+
   case "${target}" in
     memory-vector-add-float32)
       printf '%s\n' "${PROFILE_DEVICE_LABEL} vector_add float32 profile"
@@ -1120,6 +1195,11 @@ profile_title() {
 profile_operation() {
   local target=$1
 
+  if is_autotune_profile_target "${target}"; then
+    printf '%s\n' "matmul"
+    return
+  fi
+
   case "${target}" in
     memory-vector-add-float32)
       printf '%s\n' "vector_add"
@@ -1144,6 +1224,18 @@ profile_operation() {
 
 profile_strategy() {
   local target=$1
+
+  if is_autotune_profile_target "${target}"; then
+    local block_m=${BASH_REMATCH[5]}
+    local block_n=${BASH_REMATCH[6]}
+    local block_k=${BASH_REMATCH[7]}
+    local num_warps=${BASH_REMATCH[8]}
+    local num_stages=${BASH_REMATCH[9]}
+    local group_m=${BASH_REMATCH[10]}
+    printf '%s\n' \
+      "triton-autotune-block-${block_m}x${block_n}x${block_k}-warps-${num_warps}-stages-${num_stages}-groupm-${group_m}"
+    return
+  fi
 
   case "${target}" in
     memory-vector-add-float32)
@@ -1203,6 +1295,11 @@ profile_strategy() {
 profile_launch_skip() {
   local target=$1
 
+  if is_autotune_profile_target "${target}"; then
+    printf '%s\n' "5"
+    return
+  fi
+
   case "${target}" in
     memory-reduction-two-pass-float32)
       printf '%s\n' "10"
@@ -1258,7 +1355,7 @@ remote_profile_command() {
   local ncu_args
   local resolved_preset
   local target
-  local targets
+  local -a targets
 
   ncu_args=$(profile_ncu_args)
   command="cd ~/${REMOTE_DIR}"
@@ -1310,13 +1407,18 @@ remote_profile_command() {
     if [[ "${resolved_preset}" == "auto" ]]; then
       if [[ "${ONLY_DECODE_STEP}" == "1" ]]; then
         resolved_preset="decode"
-      elif [[ "${SUITE}" == "h200-roofline" || "${SUITE}" == "h200-matmul-autotune" || "${SUITE}" == "tensor-core" ]]; then
+      elif [[ "${SUITE}" == "h200-matmul-autotune" ]]; then
+        resolved_preset="autotune-winners"
+      elif [[ "${SUITE}" == "h200-roofline" || "${SUITE}" == "tensor-core" ]]; then
         resolved_preset="matmul-gaps"
       else
         resolved_preset="broad"
       fi
     fi
 
+    if [[ "${resolved_preset}" == "autotune-winners" ]]; then
+      mapfile -t targets < <(autotune_profile_targets)
+    fi
     if [[ "${resolved_preset}" == "broad" && "${ONLY_DECODE_STEP}" != "1" ]]; then
       targets+=(
         memory-vector-add-float32
@@ -1347,6 +1449,10 @@ remote_profile_command() {
         decode-step-dynamic-piecewise-graph-same-stream-float16
       )
     fi
+  fi
+
+  if ((${#targets[@]} == 0)); then
+    die "profile preset selected no targets: ${PROFILE_PRESET}"
   fi
 
   for target in "${targets[@]}"; do
@@ -1481,6 +1587,9 @@ print_plan() {
     printf '  Profile timeout seconds: %s\n' "${PROFILE_TIMEOUT_SECONDS}"
     if [[ -n "${PROFILE_TARGETS}" ]]; then
       printf '  Profile targets: %s\n' "${PROFILE_TARGETS}"
+    fi
+    if [[ -n "${PROFILE_AUTOTUNE_MANIFEST}" ]]; then
+      printf '  Profile autotune manifest: %s\n' "${PROFILE_AUTOTUNE_MANIFEST}"
     fi
     printf '  Profile JSONL: %s\n' "${PROFILE_RESULT_DIR}"
     printf '  Nsight Compute exports: %s\n' "${PROFILE_EXPORT_DIR}"

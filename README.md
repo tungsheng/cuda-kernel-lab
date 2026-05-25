@@ -91,10 +91,12 @@ Add focused Nsight Compute profiler captures to a benchmark run:
 ```
 
 Profiling defaults to a lightweight metric set, a `120` second per-target
-timeout, and an automatic target preset. H200 suites default to the
-`matmul-gaps` preset instead of profiling every broad smoke target. Rerun only
-the profiler for a specific target when the benchmark results already exist or
-a previous profile run timed out:
+timeout, and an automatic target preset. H200 roofline and Tensor Core suites
+default to the `matmul-gaps` preset instead of profiling every broad smoke
+target. The H200 autotune suite defaults to `autotune-winners`, which profiles
+the exact configs selected in `h200-matmul-best.json`. Rerun only the profiler
+for a specific target when the benchmark results already exist or a previous
+profile run timed out:
 
 ```bash
 ./scripts/benchmark \
@@ -126,14 +128,16 @@ Use the H200 autotune suite when the next question is the best stable matmul
 configuration for the measured shapes:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune --with-profiling
 uv run benchmark-compare \
   --baseline-dir experiments/results/runpod/<baseline-run-id> \
   --candidate-dir experiments/results/runpod/<run-id>
 ```
 
 The autotune run writes repeated shuffled rows to `matmul-autotune.jsonl` and
-selects stable winners in `h200-matmul-best.json`. The default H200 candidate
+selects stable winners in `h200-matmul-best.json`; with `--with-profiling`,
+Nsight summaries are captured for those winners under
+`profiling/reports/<run-id>/`. The default H200 candidate
 set avoids the shared-memory-heavy `block_k=128` tile that exceeds the observed
 H200 per-block shared-memory limit; pass `--matmul-autotune-configs` to
 `scripts/benchmark` when you want to test a custom list. Autotune runs use

@@ -236,7 +236,20 @@ gap. It runs only repeated matmul candidates, shuffles candidate order with a
 fixed seed, and writes a stable-winner manifest into the result directory:
 
 ```bash
-./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune --with-profiling
+```
+
+With profiling enabled, the shell workflow reads the generated
+`h200-matmul-best.json` manifest and runs Nsight Compute against the selected
+winner configs. Replaying only those profiles is useful after a timeout or when
+the manifest came from an earlier run:
+
+```bash
+./scripts/benchmark \
+  --run-id <run-id> \
+  --profile-only \
+  --profile-preset autotune-winners \
+  --profile-autotune-manifest experiments/results/runpod/<run-id>/h200-matmul-best.json
 ```
 
 Pass focused candidates through the shell workflow when a live run should answer
