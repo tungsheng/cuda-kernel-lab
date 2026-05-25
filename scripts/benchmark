@@ -1345,7 +1345,15 @@ profile_case_command() {
   printf -v quoted_title '%q' "${title}"
 
   printf '%s' "printf '\\n==> profiling ${target}\\n'"
-  printf '%s' " && if ( \${profile_timeout_runner} \${ncu_runner} HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" \${ncu_profile_args} --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv --page raw bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2> ${stderr_path} || \${profile_timeout_runner} \${ncu_runner} HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" \${ncu_profile_args} --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2>> ${stderr_path} ); then"
+  printf '%s' " && profile_case_ok=0"
+  printf '%s' " && : > ${stderr_path}"
+  printf '%s' "; if [ \"\${ncu_raw_page_supported:-1}\" = '1' ]; then"
+  printf '%s' " if \${profile_timeout_runner} \${ncu_runner} HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" \${ncu_profile_args} --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv --page raw bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2> ${stderr_path}; then profile_case_ok=1; else ncu_raw_page_supported=0; fi;"
+  printf '%s' " fi"
+  printf '%s' "; if [ \"\${profile_case_ok}\" != '1' ]; then"
+  printf '%s' " if \${profile_timeout_runner} \${ncu_runner} HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" \${ncu_profile_args} --target-processes all --launch-skip ${launch_skip} --launch-count 1 --csv bash -lc ${quoted_benchmark_with_log} > ${csv_path} 2>> ${stderr_path}; then profile_case_ok=1; fi;"
+  printf '%s' " fi"
+  printf '%s' "; if [ \"\${profile_case_ok}\" = '1' ]; then"
   printf '%s' " uv run nsight-summary --input ${csv_path} --output ${report_path} --title ${quoted_title} --benchmark-command ${quoted_benchmark_cmd} --result-jsonl ${PROFILE_RESULT_DIR}/${target}.jsonl --operation ${operation} --strategy ${strategy};"
   printf '%s' " else printf '# %s\\n\\nStatus: profile command failed\\n\\n- Nsight CSV: \`%s\`\\n- Nsight stderr: \`%s\`\\n- Benchmark log: \`%s\`\\n' ${quoted_title} ${csv_path} ${stderr_path} ${benchmark_log} > ${report_path}; cat ${stderr_path} >&2; false; fi"
 }
@@ -1398,6 +1406,7 @@ remote_profile_command() {
   if [[ "${PROFILE_TIMEOUT_SECONDS}" != "0" ]]; then
     command+="; if command -v timeout >/dev/null 2>&1; then profile_timeout_runner='timeout ${PROFILE_TIMEOUT_SECONDS}'; else printf 'warning: timeout command not found; profiling without per-target timeout\\n' >&2; fi"
   fi
+  command+="; ncu_raw_page_supported=1"
 
   targets=()
   if [[ -n "${PROFILE_TARGETS}" ]]; then

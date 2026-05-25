@@ -279,6 +279,8 @@ def test_h200_matmul_autotune_defaults_avoid_over_shared_memory_candidate() -> N
     assert command_lines
     assert not any("--block-k 128" in line for line in command_lines)
     assert any("--num-warps 8 --num-stages 4" in line for line in command_lines)
+    assert any("--num-warps 8 --num-stages 5" in line for line in command_lines)
+    assert any("--num-warps 8 --num-stages 6" in line for line in command_lines)
 
 
 def test_matrix_can_include_rmsnorm_shape_sweep() -> None:

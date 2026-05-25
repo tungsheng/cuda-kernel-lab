@@ -304,7 +304,9 @@ choices so H200 runs surface the highest-impact matmul gap directly. The
 H200 matmul autotune suite writes repeated candidates to
 `matmul-autotune.jsonl` and stable winners to `h200-matmul-best.json`. Its
 default candidate list avoids the shared-memory-heavy `block_k=128` tile that
-exceeds the observed H200 per-block shared-memory limit. The shell workflow
+exceeds the observed H200 per-block shared-memory limit and includes stage-5
+and stage-6 neighbors around the `128x128x64`, 8-warp winner family. The shell
+workflow
 also enables matrix keep-going mode for this suite, writing any failed candidate
 commands to `benchmark-failures.json` so the remaining candidates can still be
 reported and summarized. The
