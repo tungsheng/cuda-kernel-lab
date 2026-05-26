@@ -244,6 +244,7 @@ def test_h200_matmul_autotune_suite_runs_only_repeated_matmul_candidates() -> No
         matmul_autotune_shapes=((512, 11008, 4096),),
         matmul_autotune_dtypes=("float16",),
         matmul_autotune_schedules=("standard", "persistent"),
+        matmul_autotune_persistent_waves=(1, 2),
         matmul_autotune_configs=((128, 128, 64, 4, 4, 1), (128, 128, 64, 4, 4, 4)),
         matmul_autotune_repeats=2,
         matmul_autotune_seed=7,
@@ -254,19 +255,21 @@ def test_h200_matmul_autotune_suite_runs_only_repeated_matmul_candidates() -> No
         matmul_autotune_shapes=((512, 11008, 4096),),
         matmul_autotune_dtypes=("float16",),
         matmul_autotune_schedules=("standard", "persistent"),
+        matmul_autotune_persistent_waves=(1, 2),
         matmul_autotune_configs=((128, 128, 64, 4, 4, 1), (128, 128, 64, 4, 4, 4)),
         matmul_autotune_repeats=2,
         matmul_autotune_seed=7,
     )
     command_lines = [entry.shell_line() for entry in entries]
 
-    assert len(entries) == 8
+    assert len(entries) == 12
     assert command_lines == [entry.shell_line() for entry in second_entries]
     assert all("benchmark-matmul" in line for line in command_lines)
     assert all("results/matmul-autotune.jsonl" in line for line in command_lines)
     assert not any("benchmark-memory" in line for line in command_lines)
-    assert sum("--group-m 4" in line for line in command_lines) == 4
-    assert sum("--schedule persistent" in line for line in command_lines) == 4
+    assert sum("--group-m 4" in line for line in command_lines) == 6
+    assert sum("--schedule persistent" in line for line in command_lines) == 8
+    assert sum("--persistent-waves 2" in line for line in command_lines) == 4
 
 
 def test_h200_matmul_autotune_defaults_avoid_over_shared_memory_candidate() -> None:
@@ -476,6 +479,8 @@ def test_dry_run_can_select_h200_matmul_autotune_suite(
             "float16",
             "--matmul-autotune-schedules",
             "standard,persistent",
+            "--matmul-autotune-persistent-waves",
+            "1,2",
             "--matmul-autotune-configs",
             "128x128x64x4x4x4",
             "--matmul-autotune-repeats",
@@ -490,6 +495,7 @@ def test_dry_run_can_select_h200_matmul_autotune_suite(
     assert "--m 512 --n 11008 --k 4096 --dtype float16" in output
     assert "--group-m 4" in output
     assert "--schedule persistent" in output
+    assert "--persistent-waves 2" in output
     assert "benchmark-memory" not in output
 
 
@@ -578,6 +584,9 @@ def test_matrix_rejects_invalid_timing_values() -> None:
 
     with pytest.raises(ValueError, match="matmul_autotune_schedules"):
         benchmark_matrix.build_matrix(matmul_autotune_schedules=("round-robin",))
+
+    with pytest.raises(ValueError, match="matmul_autotune_persistent_waves"):
+        benchmark_matrix.build_matrix(matmul_autotune_persistent_waves=(0,))
 
     with pytest.raises(ValueError, match="matmul_autotune_configs"):
         benchmark_matrix.build_matrix(matmul_autotune_configs=((128, 128, 64),))

@@ -88,6 +88,7 @@ DEFAULT_MATMUL_AUTOTUNE_SHAPES = (
 DEFAULT_MATMUL_AUTOTUNE_DTYPES = ("float16", "bfloat16")
 MATMUL_SCHEDULES = ("standard", "persistent")
 DEFAULT_MATMUL_AUTOTUNE_SCHEDULES = ("standard",)
+DEFAULT_MATMUL_AUTOTUNE_PERSISTENT_WAVES = (1,)
 # Keep default H200 candidates under the observed 232448-byte shared-memory limit.
 DEFAULT_MATMUL_AUTOTUNE_CONFIGS = (
     (128, 128, 64, 4, 4, 1),
@@ -215,6 +216,9 @@ def build_matrix(
     matmul_autotune_shapes: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_AUTOTUNE_SHAPES,
     matmul_autotune_dtypes: tuple[str, ...] = DEFAULT_MATMUL_AUTOTUNE_DTYPES,
     matmul_autotune_schedules: tuple[str, ...] = DEFAULT_MATMUL_AUTOTUNE_SCHEDULES,
+    matmul_autotune_persistent_waves: tuple[
+        int, ...
+    ] = DEFAULT_MATMUL_AUTOTUNE_PERSISTENT_WAVES,
     matmul_autotune_configs: tuple[tuple[int, ...], ...] = DEFAULT_MATMUL_AUTOTUNE_CONFIGS,
     matmul_autotune_repeats: int = DEFAULT_MATMUL_AUTOTUNE_REPEATS,
     matmul_autotune_seed: int = DEFAULT_MATMUL_AUTOTUNE_SEED,
@@ -325,6 +329,10 @@ def build_matrix(
         raise ValueError("matmul_autotune_schedules must not be empty")
     if any(schedule not in MATMUL_SCHEDULES for schedule in matmul_autotune_schedules):
         raise ValueError("matmul_autotune_schedules must be one of standard, persistent")
+    if not matmul_autotune_persistent_waves:
+        raise ValueError("matmul_autotune_persistent_waves must not be empty")
+    if any(value <= 0 for value in matmul_autotune_persistent_waves):
+        raise ValueError("matmul_autotune_persistent_waves must be positive")
     if any(len(config) != 6 for config in matmul_autotune_configs):
         raise ValueError("matmul_autotune_configs must be MxNxKxWARPSxSTAGESxGROUPM values")
     if any(any(dim <= 0 for dim in config) for config in matmul_autotune_configs):
@@ -739,6 +747,7 @@ def build_matrix(
                 shapes=matmul_autotune_shapes,
                 dtypes=matmul_autotune_dtypes,
                 schedules=matmul_autotune_schedules,
+                persistent_waves=matmul_autotune_persistent_waves,
                 configs=matmul_autotune_configs,
                 repeats=matmul_autotune_repeats,
                 seed=matmul_autotune_seed,
@@ -1004,6 +1013,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated Triton matmul schedules for --include-matmul-autotune-suite.",
     )
     parser.add_argument(
+        "--matmul-autotune-persistent-waves",
+        default=_join_int_values(DEFAULT_MATMUL_AUTOTUNE_PERSISTENT_WAVES),
+        help=(
+            "Comma-separated resident-program waves per SM for persistent "
+            "h200-matmul-autotune candidates."
+        ),
+    )
+    parser.add_argument(
         "--matmul-autotune-configs",
         default=_join_matmul_tuning_configs(DEFAULT_MATMUL_AUTOTUNE_CONFIGS),
         help=(
@@ -1203,6 +1220,10 @@ def main(argv: list[str] | None = None) -> None:
         matmul_autotune_shapes=_parse_tile_shapes(args.matmul_autotune_shapes),
         matmul_autotune_dtypes=_parse_values(args.matmul_autotune_dtypes),
         matmul_autotune_schedules=_parse_values(args.matmul_autotune_schedules),
+        matmul_autotune_persistent_waves=_parse_int_values(
+            args.matmul_autotune_persistent_waves,
+            label="matmul_autotune_persistent_waves",
+        ),
         matmul_autotune_configs=_parse_matmul_tuning_configs(args.matmul_autotune_configs),
         matmul_autotune_repeats=args.matmul_autotune_repeats,
         matmul_autotune_seed=args.matmul_autotune_seed,
@@ -1304,6 +1325,7 @@ def _matmul_command(
     input_precision: str,
     group_m: int = DEFAULT_MATMUL_GROUP_M,
     schedule: str = "standard",
+    persistent_waves: int = 1,
     warmup: int,
     iterations: int,
     output: Path,
@@ -1344,6 +1366,7 @@ def _matmul_command(
         command.extend(("--group-m", str(group_m)))
     if schedule != "standard":
         command.extend(("--schedule", schedule))
+        command.extend(("--persistent-waves", str(persistent_waves)))
     command.extend(
         (
             "--warmup",
@@ -1366,6 +1389,7 @@ def _matmul_autotune_commands(
     shapes: tuple[tuple[int, ...], ...],
     dtypes: tuple[str, ...],
     schedules: tuple[str, ...],
+    persistent_waves: tuple[int, ...],
     configs: tuple[tuple[int, ...], ...],
     repeats: int,
     seed: int,
@@ -1375,38 +1399,41 @@ def _matmul_autotune_commands(
         for dtype in dtypes:
             for m, n, k in shapes:
                 for schedule in schedules:
-                    for (
-                        block_m,
-                        block_n,
-                        block_k,
-                        num_warps,
-                        num_stages,
-                        group_m,
-                    ) in configs:
-                        commands.append(
-                            MatrixCommand(
-                                primitive="matmul",
-                                dtype=dtype,
-                                command=_matmul_command(
-                                    device=device,
+                    schedule_waves = persistent_waves if schedule == "persistent" else (1,)
+                    for wave_count in schedule_waves:
+                        for (
+                            block_m,
+                            block_n,
+                            block_k,
+                            num_warps,
+                            num_stages,
+                            group_m,
+                        ) in configs:
+                            commands.append(
+                                MatrixCommand(
+                                    primitive="matmul",
                                     dtype=dtype,
-                                    block_m=block_m,
-                                    block_n=block_n,
-                                    block_k=block_k,
-                                    num_warps=num_warps,
-                                    num_stages=num_stages,
-                                    input_precision="tf32",
-                                    group_m=group_m,
-                                    schedule=schedule,
-                                    warmup=warmup,
-                                    iterations=iterations,
-                                    output=output_dir / "matmul-autotune.jsonl",
-                                    m=m,
-                                    n=n,
-                                    k=k,
-                                ),
+                                    command=_matmul_command(
+                                        device=device,
+                                        dtype=dtype,
+                                        block_m=block_m,
+                                        block_n=block_n,
+                                        block_k=block_k,
+                                        num_warps=num_warps,
+                                        num_stages=num_stages,
+                                        input_precision="tf32",
+                                        group_m=group_m,
+                                        schedule=schedule,
+                                        persistent_waves=wave_count,
+                                        warmup=warmup,
+                                        iterations=iterations,
+                                        output=output_dir / "matmul-autotune.jsonl",
+                                        m=m,
+                                        n=n,
+                                        k=k,
+                                    ),
+                                )
                             )
-                        )
 
     random.Random(seed).shuffle(commands)
     return tuple(commands)

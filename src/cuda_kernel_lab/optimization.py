@@ -175,14 +175,14 @@ def matmul_optimization(
             method_id="triton.persistent_tiled_dot",
             technique="Persistent tiled dot-product scheduling",
             hypothesis=(
-                "Keeping a bounded set of Triton programs resident across multiple output "
-                "tiles can reduce launch scheduling overhead and improve H200 SM residency "
-                "for large Tensor Core GEMM shapes."
+                "Keeping a tunable set of Triton programs resident across multiple output "
+                "tiles can reduce launch scheduling overhead while using enough waves to "
+                "avoid under-parallelizing H200 Tensor Core GEMM shapes."
             ),
             expected_profiler_signal=(
                 "Comparable Tensor Core utilization to the tiled-dot baseline with fewer "
-                "active CTAs than output tiles, stable SM occupancy, and lower tail latency "
-                "when tile scheduling overhead matters."
+                "active CTAs than output tiles, stable SM occupancy, and a wave count that "
+                "balances persistent reuse against CTA-level parallelism."
             ),
         )
 

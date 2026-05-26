@@ -255,6 +255,8 @@ def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path)
             "512x11008x4096",
             "--matmul-autotune-schedules",
             "standard,persistent",
+            "--matmul-autotune-persistent-waves",
+            "1,2",
             "--matmul-autotune-configs",
             "128x128x64x4x4x4,128x128x64x4x4x8",
             "--matmul-autotune-repeats",
@@ -279,9 +281,11 @@ def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path)
         in result.stdout
     )
     assert "Matmul autotune schedules: standard,persistent" in result.stdout
+    assert "Matmul autotune persistent waves: 1,2" in result.stdout
     assert "Matmul autotune repeats: 2" in result.stdout
     assert "--keep-going" in result.stdout
     assert "--matmul-autotune-schedules" in result.stdout
+    assert "--matmul-autotune-persistent-waves" in result.stdout
     assert "--matmul-autotune-configs" in result.stdout
     assert "--include-vector-add-sweep" not in result.stdout
     assert "--include-reduction-sweep" not in result.stdout
@@ -443,7 +447,7 @@ def test_benchmark_dry_run_profiles_persistent_autotune_target(tmp_path: Path) -
     )
     target = (
         "matmul-autotune-bfloat16-512x11008x4096-"
-        "bm128-bn128-bk64-w8-s5-gm8-schpersistent-iptf32"
+        "bm128-bn128-bk64-w8-s5-gm8-schpersistent-pw4-iptf32"
     )
 
     result = subprocess.run(
@@ -469,7 +473,8 @@ def test_benchmark_dry_run_profiles_persistent_autotune_target(tmp_path: Path) -
 
     assert target in result.stdout
     assert "--schedule\\ persistent" in result.stdout
-    assert "schedule-persistent" in result.stdout
+    assert "--persistent-waves\\ 4" in result.stdout
+    assert "schedule-persistent-waves-4" in result.stdout
 
 
 def test_benchmark_dry_run_preserves_aws_connection(tmp_path: Path) -> None:

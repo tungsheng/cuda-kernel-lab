@@ -100,6 +100,7 @@ DECODE_ORCHESTRATION_TIMING=""
 MATMUL_AUTOTUNE_SHAPES=""
 MATMUL_AUTOTUNE_DTYPES=""
 MATMUL_AUTOTUNE_SCHEDULES=""
+MATMUL_AUTOTUNE_PERSISTENT_WAVES=""
 MATMUL_AUTOTUNE_CONFIGS=""
 MATMUL_AUTOTUNE_REPEATS=""
 MATMUL_AUTOTUNE_SEED=""
@@ -198,6 +199,9 @@ Options:
   --matmul-autotune-schedules <csv>
                             Comma-separated schedules passed to h200-matmul-autotune:
                             standard or persistent.
+  --matmul-autotune-persistent-waves <csv>
+                            Comma-separated resident-program waves per SM for persistent
+                            h200-matmul-autotune candidates.
   --matmul-autotune-configs <list>
                             Comma-separated BLOCKMxBLOCKNxBLOCKKxWARPSxSTAGESxGROUPM
                             configs passed to h200-matmul-autotune.
@@ -362,6 +366,11 @@ parse_args() {
       --matmul-autotune-schedules)
         require_value "$1" "${2:-}"
         MATMUL_AUTOTUNE_SCHEDULES=${2:-}
+        shift 2
+        ;;
+      --matmul-autotune-persistent-waves)
+        require_value "$1" "${2:-}"
+        MATMUL_AUTOTUNE_PERSISTENT_WAVES=${2:-}
         shift 2
         ;;
       --matmul-autotune-configs)
@@ -633,6 +642,22 @@ validate_integer_csv() {
   }
 }
 
+validate_positive_integer_csv() {
+  local label=$1
+  local value=$2
+  local item
+  local items=()
+
+  [[ "${value}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || {
+    die "${label} must be a comma-separated list of positive integers"
+  }
+
+  IFS=',' read -r -a items <<< "${value}"
+  for item in "${items[@]}"; do
+    validate_positive_integer "${label}" "${item}"
+  done
+}
+
 validate_matmul_schedule_csv() {
   local label=$1
   local value=$2
@@ -736,7 +761,7 @@ is_profile_target() {
 }
 
 is_autotune_profile_target() {
-  [[ "$1" =~ ^matmul-autotune-(float16|bfloat16|float32)-([0-9]+)x([0-9]+)x([0-9]+)-bm([0-9]+)-bn([0-9]+)-bk([0-9]+)-w([0-9]+)-s([0-9]+)-gm([0-9]+)(-sch(standard|persistent))?-ip(tf32|tf32x3|ieee)$ ]]
+  [[ "$1" =~ ^matmul-autotune-(float16|bfloat16|float32)-([0-9]+)x([0-9]+)x([0-9]+)-bm([0-9]+)-bn([0-9]+)-bk([0-9]+)-w([0-9]+)-s([0-9]+)-gm([0-9]+)(-sch(standard|persistent))?(-pw([0-9]+))?-ip(tf32|tf32x3|ieee)$ ]]
 }
 
 validate_profile_options() {
@@ -804,6 +829,11 @@ validate_inputs() {
   validate_decode_orchestration_timing "${DECODE_ORCHESTRATION_TIMING}"
   if [[ -n "${MATMUL_AUTOTUNE_SCHEDULES}" ]]; then
     validate_matmul_schedule_csv "--matmul-autotune-schedules" "${MATMUL_AUTOTUNE_SCHEDULES}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_PERSISTENT_WAVES}" ]]; then
+    validate_positive_integer_csv \
+      "--matmul-autotune-persistent-waves" \
+      "${MATMUL_AUTOTUNE_PERSISTENT_WAVES}"
   fi
   if [[ "${PROFILE}" == "1" ]]; then
     validate_profile_options
@@ -1032,6 +1062,9 @@ remote_benchmark_command() {
   if [[ -n "${MATMUL_AUTOTUNE_SCHEDULES}" ]]; then
     command+=" --matmul-autotune-schedules $(shell_quote "${MATMUL_AUTOTUNE_SCHEDULES}")"
   fi
+  if [[ -n "${MATMUL_AUTOTUNE_PERSISTENT_WAVES}" ]]; then
+    command+=" --matmul-autotune-persistent-waves $(shell_quote "${MATMUL_AUTOTUNE_PERSISTENT_WAVES}")"
+  fi
   if [[ -n "${MATMUL_AUTOTUNE_CONFIGS}" ]]; then
     command+=" --matmul-autotune-configs $(shell_quote "${MATMUL_AUTOTUNE_CONFIGS}")"
   fi
@@ -1082,13 +1115,16 @@ profile_benchmark_command() {
     local num_stages=${BASH_REMATCH[9]}
     local group_m=${BASH_REMATCH[10]}
     local schedule=${BASH_REMATCH[12]:-standard}
-    local input_precision=${BASH_REMATCH[13]}
+    local persistent_waves=${BASH_REMATCH[14]:-1}
+    local input_precision=${BASH_REMATCH[15]}
     local schedule_arg=""
+    local persistent_waves_arg=""
     if [[ "${schedule}" != "standard" ]]; then
       schedule_arg=" --schedule ${schedule}"
+      persistent_waves_arg=" --persistent-waves ${persistent_waves}"
     fi
     printf '%s\n' \
-      "uv run benchmark-matmul --backend triton --device cuda --m ${m} --n ${n} --k ${k} --dtype ${dtype} --block-m ${block_m} --block-n ${block_n} --block-k ${block_k} --num-warps ${num_warps} --num-stages ${num_stages} --input-precision ${input_precision} --group-m ${group_m}${schedule_arg} --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/${target}.jsonl"
+      "uv run benchmark-matmul --backend triton --device cuda --m ${m} --n ${n} --k ${k} --dtype ${dtype} --block-m ${block_m} --block-n ${block_n} --block-k ${block_k} --num-warps ${num_warps} --num-stages ${num_stages} --input-precision ${input_precision} --group-m ${group_m}${schedule_arg}${persistent_waves_arg} --warmup 5 --iterations 10 --skip-correctness --output ${PROFILE_RESULT_DIR}/${target}.jsonl"
     return
   fi
 
@@ -1186,13 +1222,16 @@ profile_capture_command() {
     local num_stages=${BASH_REMATCH[9]}
     local group_m=${BASH_REMATCH[10]}
     local schedule=${BASH_REMATCH[12]:-standard}
-    local input_precision=${BASH_REMATCH[13]}
+    local persistent_waves=${BASH_REMATCH[14]:-1}
+    local input_precision=${BASH_REMATCH[15]}
     local schedule_arg=""
+    local persistent_waves_arg=""
     if [[ "${schedule}" != "standard" ]]; then
       schedule_arg=" --schedule ${schedule}"
+      persistent_waves_arg=" --persistent-waves ${persistent_waves}"
     fi
     printf '%s\n' \
-      "\"\${profile_python}\" -m cuda_kernel_lab.profile_capture matmul --m ${m} --n ${n} --k ${k} --dtype ${dtype} --device cuda --block-m ${block_m} --block-n ${block_n} --block-k ${block_k} --num-warps ${num_warps} --num-stages ${num_stages} --input-precision ${input_precision} --group-m ${group_m}${schedule_arg} --warmup 2 --profile-iterations 1"
+      "\"\${profile_python}\" -m cuda_kernel_lab.profile_capture matmul --m ${m} --n ${n} --k ${k} --dtype ${dtype} --device cuda --block-m ${block_m} --block-n ${block_n} --block-k ${block_k} --num-warps ${num_warps} --num-stages ${num_stages} --input-precision ${input_precision} --group-m ${group_m}${schedule_arg}${persistent_waves_arg} --warmup 2 --profile-iterations 1"
     return
   fi
 
@@ -1238,8 +1277,13 @@ profile_title() {
     local num_stages=${BASH_REMATCH[9]}
     local group_m=${BASH_REMATCH[10]}
     local schedule=${BASH_REMATCH[12]:-standard}
+    local persistent_waves=${BASH_REMATCH[14]:-1}
+    local wave_suffix=""
+    if [[ "${schedule}" == "persistent" ]]; then
+      wave_suffix=" persistent_waves ${persistent_waves}"
+    fi
     printf '%s\n' \
-      "${PROFILE_DEVICE_LABEL} autotune winner ${dtype} ${m}x${n}x${k} block ${block_m}x${block_n}x${block_k} warps ${num_warps} stages ${num_stages} group_m ${group_m} schedule ${schedule} profile"
+      "${PROFILE_DEVICE_LABEL} autotune winner ${dtype} ${m}x${n}x${k} block ${block_m}x${block_n}x${block_k} warps ${num_warps} stages ${num_stages} group_m ${group_m} schedule ${schedule}${wave_suffix} profile"
     return
   fi
 
@@ -1345,9 +1389,11 @@ profile_strategy() {
     local num_stages=${BASH_REMATCH[9]}
     local group_m=${BASH_REMATCH[10]}
     local schedule=${BASH_REMATCH[12]:-standard}
+    local persistent_waves=${BASH_REMATCH[14]:-1}
     local schedule_suffix=""
     if [[ "${schedule}" != "standard" ]]; then
       schedule_suffix="-schedule-${schedule}"
+      schedule_suffix+="-waves-${persistent_waves}"
     fi
     printf '%s\n' \
       "triton-autotune-block-${block_m}x${block_n}x${block_k}-warps-${num_warps}-stages-${num_stages}-groupm-${group_m}${schedule_suffix}"
@@ -1729,6 +1775,9 @@ print_plan() {
   fi
   if [[ -n "${MATMUL_AUTOTUNE_SCHEDULES}" ]]; then
     printf '  Matmul autotune schedules: %s\n' "${MATMUL_AUTOTUNE_SCHEDULES}"
+  fi
+  if [[ -n "${MATMUL_AUTOTUNE_PERSISTENT_WAVES}" ]]; then
+    printf '  Matmul autotune persistent waves: %s\n' "${MATMUL_AUTOTUNE_PERSISTENT_WAVES}"
   fi
   if [[ -n "${MATMUL_AUTOTUNE_CONFIGS}" ]]; then
     printf '  Matmul autotune configs: %s\n' "${MATMUL_AUTOTUNE_CONFIGS}"

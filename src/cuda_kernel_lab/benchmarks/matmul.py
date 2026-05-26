@@ -26,6 +26,7 @@ from cuda_kernel_lab.optimization import matmul_optimization
 INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
 SCHEDULES = ("standard", "persistent")
 DEFAULT_SCHEDULE = "standard"
+DEFAULT_PERSISTENT_WAVES = 1
 
 
 def main() -> None:
@@ -54,6 +55,7 @@ def main() -> None:
                 input_precision=args.input_precision,
                 group_m=args.group_m,
                 schedule=args.schedule,
+                persistent_waves=args.persistent_waves,
                 warmup=args.warmup,
                 iterations=args.iterations,
                 skip_correctness=args.skip_correctness,
@@ -91,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SCHEDULE,
         help="Triton matmul tile scheduler.",
     )
+    parser.add_argument(
+        "--persistent-waves",
+        type=int,
+        default=DEFAULT_PERSISTENT_WAVES,
+        help="Resident-program waves per SM for --schedule persistent.",
+    )
     add_common_benchmark_args(parser)
     return parser.parse_args()
 
@@ -120,6 +128,7 @@ def run_one(
     input_precision: str,
     group_m: int,
     schedule: str,
+    persistent_waves: int,
     warmup: int,
     iterations: int,
     skip_correctness: bool,
@@ -128,8 +137,10 @@ def run_one(
         raise ValueError("m, n, and k must be positive")
     if block_m <= 0 or block_n <= 0 or block_k <= 0:
         raise ValueError("block_m, block_n, and block_k must be positive")
-    if num_warps <= 0 or num_stages <= 0 or group_m <= 0:
-        raise ValueError("num_warps, num_stages, and group_m must be positive")
+    if num_warps <= 0 or num_stages <= 0 or group_m <= 0 or persistent_waves <= 0:
+        raise ValueError(
+            "num_warps, num_stages, group_m, and persistent_waves must be positive"
+        )
     if input_precision not in INPUT_PRECISIONS:
         choices = ", ".join(INPUT_PRECISIONS)
         raise ValueError(f"input_precision must be one of: {choices}")
@@ -153,6 +164,7 @@ def run_one(
         input_precision,
         group_m,
         schedule,
+        persistent_waves,
     )
     correctness = None
     if not skip_correctness:
@@ -169,6 +181,7 @@ def run_one(
             input_precision,
             group_m,
             DEFAULT_SCHEDULE,
+            DEFAULT_PERSISTENT_WAVES,
         )()
         actual = fn()
         rtol, atol = correctness_tolerance(dtype)
@@ -182,7 +195,11 @@ def run_one(
 
     dtype_size = dtype_size_bytes(dtype)
 
-    strategy = _strategy_label(backend=backend, schedule=schedule)
+    strategy = _strategy_label(
+        backend=backend,
+        schedule=schedule,
+        persistent_waves=persistent_waves,
+    )
     return benchmark_callable(
         f"{backend}:matmul",
         fn,
@@ -194,10 +211,16 @@ def run_one(
         warmup=warmup,
         iterations=iterations,
         strategy=strategy,
-        variant=(
-            f"block_m={block_m}, block_n={block_n}, block_k={block_k}, "
-            f"num_warps={num_warps}, num_stages={num_stages}, "
-            f"input_precision={input_precision}, group_m={group_m}, schedule={schedule}"
+        variant=_variant_label(
+            block_m=block_m,
+            block_n=block_n,
+            block_k=block_k,
+            num_warps=num_warps,
+            num_stages=num_stages,
+            input_precision=input_precision,
+            group_m=group_m,
+            schedule=schedule,
+            persistent_waves=persistent_waves,
         ),
         parameters={
             "block_m": block_m,
@@ -208,6 +231,7 @@ def run_one(
             "input_precision": input_precision,
             "group_m": group_m,
             "schedule": schedule,
+            "persistent_waves": persistent_waves,
         },
         optimization=matmul_optimization(backend=backend, schedule=schedule),
         correctness=correctness,
@@ -227,6 +251,7 @@ def build_op(
     input_precision: str,
     group_m: int,
     schedule: str,
+    persistent_waves: int,
 ) -> Callable[[], Any]:
     if backend == "torch":
         from cuda_kernel_lab.kernels.torch_baselines import matmul
@@ -247,16 +272,41 @@ def build_op(
             input_precision=input_precision,
             group_m=group_m,
             schedule=schedule,
+            persistent_waves=persistent_waves,
             out=out,
         )
 
     raise ValueError(f"unknown backend: {backend}")
 
 
-def _strategy_label(*, backend: str, schedule: str) -> str:
+def _variant_label(
+    *,
+    block_m: int,
+    block_n: int,
+    block_k: int,
+    num_warps: int,
+    num_stages: int,
+    input_precision: str,
+    group_m: int,
+    schedule: str,
+    persistent_waves: int,
+) -> str:
+    label = (
+        f"block_m={block_m}, block_n={block_n}, block_k={block_k}, "
+        f"num_warps={num_warps}, num_stages={num_stages}, "
+        f"input_precision={input_precision}, group_m={group_m}, schedule={schedule}"
+    )
+    if schedule == "persistent":
+        label += f", persistent_waves={persistent_waves}"
+    return label
+
+
+def _strategy_label(*, backend: str, schedule: str, persistent_waves: int) -> str:
     if backend == "torch":
         return "torch-baseline"
     if schedule == "persistent":
+        if persistent_waves != DEFAULT_PERSISTENT_WAVES:
+            return f"triton-persistent-{persistent_waves}-wave-tiled-dot"
         return "triton-persistent-tiled-dot"
     return "triton-tiled-dot"
 

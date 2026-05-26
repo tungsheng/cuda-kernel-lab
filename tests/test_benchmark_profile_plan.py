@@ -73,6 +73,19 @@ def test_profile_targets_include_non_default_schedule() -> None:
     )
 
 
+def test_profile_targets_include_persistent_waves_when_present() -> None:
+    winner = _winner("bfloat16", [512, 11008, 4096], group_m=8)
+    parameters = winner["parameters"]
+    assert isinstance(parameters, dict)
+    parameters["schedule"] = "persistent"
+    parameters["persistent_waves"] = 4
+
+    assert benchmark_profile_plan.profile_targets_from_manifest({"winners": [winner]}) == (
+        "matmul-autotune-bfloat16-512x11008x4096-"
+        "bm128-bn128-bk64-w8-s4-gm8-schpersistent-pw4-iptf32",
+    )
+
+
 def _winner(dtype: str, shape: list[int], *, group_m: int) -> dict[str, object]:
     return {
         "dtype": dtype,

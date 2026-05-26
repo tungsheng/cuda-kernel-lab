@@ -131,6 +131,9 @@ def _target_for_winner(
     if schedule not in {"standard", "persistent"}:
         raise ValueError("schedule must be one of: standard, persistent")
     schedule_suffix = "" if schedule == "standard" else f"-sch{schedule}"
+    persistent_waves_suffix = ""
+    if schedule == "persistent" and "persistent_waves" in parameters:
+        persistent_waves_suffix = f"-pw{_positive_int(parameters, 'persistent_waves')}"
     m, n, k = shape
     return (
         f"{TARGET_PREFIX}-{dtype}-{m}x{n}x{k}"
@@ -141,6 +144,7 @@ def _target_for_winner(
         f"-s{_positive_int(parameters, 'num_stages')}"
         f"-gm{_positive_int(parameters, 'group_m')}"
         f"{schedule_suffix}"
+        f"{persistent_waves_suffix}"
         f"-ip{input_precision}"
     )
 

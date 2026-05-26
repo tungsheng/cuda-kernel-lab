@@ -123,11 +123,14 @@ retest the remaining H200 matmul gap directly:
   --suite h200-matmul-autotune \
   --matmul-autotune-shapes 512x11008x4096 \
   --matmul-autotune-schedules standard,persistent \
+  --matmul-autotune-persistent-waves 1,2,3,4 \
   --matmul-autotune-configs 128x128x64x4x4x4,128x128x64x4x4x8
 ```
 
 Autotune runs continue after an individual candidate failure and write
-`benchmark-failures.json` beside the JSONL results.
+`benchmark-failures.json` beside the JSONL results. Persistent wave sweeps only
+expand persistent candidates; the standard scheduler still runs once per dtype,
+shape, config, and repeat.
 
 For the current decode-step graph and dynamic batching track, skip the full
 matrix and run the resident head-major KV path directly:

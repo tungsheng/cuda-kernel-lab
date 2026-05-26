@@ -261,6 +261,7 @@ a narrower question:
   --suite h200-matmul-autotune \
   --matmul-autotune-shapes 512x11008x4096 \
   --matmul-autotune-schedules standard,persistent \
+  --matmul-autotune-persistent-waves 1,2,3,4 \
   --matmul-autotune-configs 128x128x64x4x4x4,128x128x64x4x4x8 \
   --matmul-autotune-repeats 3
 ```
@@ -309,10 +310,11 @@ exceeds the observed H200 per-block shared-memory limit and includes stage-5
 and stage-6 neighbors around the `128x128x64`, 8-warp winner family. Pass
 `--matmul-autotune-schedules standard,persistent` when comparing the default
 one-program-per-output-tile scheduler against the H200 persistent scheduler on
-a focused candidate set. The shell workflow
-also enables matrix keep-going mode for this suite, writing any failed candidate
-commands to `benchmark-failures.json` so the remaining candidates can still be
-reported and summarized.
+a focused candidate set, and add `--matmul-autotune-persistent-waves` to test
+multiple resident-program waves per SM for persistent candidates. The shell
+workflow also enables matrix keep-going mode for this suite, writing any failed
+candidate commands to `benchmark-failures.json` so the remaining candidates can
+still be reported and summarized.
 RMSNorm shape sweep writes to
 `rmsnorm-shape-sweep.jsonl`. The attention baseline writes to `attention.jsonl`.
 The fixed-shape decode-step graph benchmark writes to `decode-step.jsonl`. The

@@ -8,6 +8,7 @@ from typing import Any
 
 from cuda_kernel_lab.benchmark_cli import require_torch, resolve_device, resolve_dtype
 from cuda_kernel_lab.benchmarks.matmul import (
+    DEFAULT_PERSISTENT_WAVES,
     DEFAULT_SCHEDULE,
     INPUT_PRECISIONS,
     SCHEDULES,
@@ -41,6 +42,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     matmul.add_argument("--input-precision", choices=INPUT_PRECISIONS, required=True)
     matmul.add_argument("--group-m", type=int, required=True)
     matmul.add_argument("--schedule", choices=SCHEDULES, default=DEFAULT_SCHEDULE)
+    matmul.add_argument("--persistent-waves", type=int, default=DEFAULT_PERSISTENT_WAVES)
     matmul.add_argument("--warmup", type=int, default=2)
     matmul.add_argument("--profile-iterations", type=int, default=1)
 
@@ -52,6 +54,8 @@ def run_matmul(args: argparse.Namespace) -> None:
         raise ValueError("warmup must be non-negative")
     if args.profile_iterations <= 0:
         raise ValueError("profile-iterations must be positive")
+    if args.persistent_waves <= 0:
+        raise ValueError("persistent-waves must be positive")
 
     torch = require_torch()
     device = resolve_device(torch, args.device)
@@ -73,6 +77,7 @@ def run_matmul(args: argparse.Namespace) -> None:
         args.input_precision,
         args.group_m,
         args.schedule,
+        args.persistent_waves,
     )
 
     _run_warmup(fn, torch=torch, device=device, warmup=args.warmup)

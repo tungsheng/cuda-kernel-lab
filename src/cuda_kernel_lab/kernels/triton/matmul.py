@@ -24,6 +24,7 @@ DEFAULT_GROUP_M = 1
 INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
 DEFAULT_SCHEDULE = "standard"
 SCHEDULES = ("standard", "persistent")
+DEFAULT_PERSISTENT_WAVES = 1
 
 
 def is_available() -> bool:
@@ -44,12 +45,18 @@ def matmul(
     input_precision: str = DEFAULT_INPUT_PRECISION,
     group_m: int = DEFAULT_GROUP_M,
     schedule: str = DEFAULT_SCHEDULE,
+    persistent_waves: int = DEFAULT_PERSISTENT_WAVES,
     out: Any | None = None,
 ) -> Any:
     """Return a @ b using a tiled Triton kernel."""
 
     _require_positive_blocks(block_m=block_m, block_n=block_n, block_k=block_k)
-    _require_positive_launch(num_warps=num_warps, num_stages=num_stages, group_m=group_m)
+    _require_positive_launch(
+        num_warps=num_warps,
+        num_stages=num_stages,
+        group_m=group_m,
+        persistent_waves=persistent_waves,
+    )
     _require_input_precision(input_precision)
     _require_schedule(schedule)
     _require_matmul_inputs(a, b)
@@ -60,7 +67,9 @@ def matmul(
 
     if schedule == "persistent":
         num_sms = torch.cuda.get_device_properties(a.device).multi_processor_count
-        grid = (min(num_sms, triton.cdiv(m, block_m) * triton.cdiv(n, block_n)),)
+        total_tiles = triton.cdiv(m, block_m) * triton.cdiv(n, block_n)
+        num_programs = min(num_sms * persistent_waves, total_tiles)
+        grid = (num_programs,)
         _matmul_persistent_kernel[grid](
             a,
             b,
@@ -79,7 +88,7 @@ def matmul(
             block_k,
             input_precision,
             group_m,
-            num_sms,
+            num_programs,
             num_warps=num_warps,
             num_stages=num_stages,
         )
@@ -115,9 +124,17 @@ def _require_positive_blocks(*, block_m: int, block_n: int, block_k: int) -> Non
         raise ValueError("block_m, block_n, and block_k must be positive")
 
 
-def _require_positive_launch(*, num_warps: int, num_stages: int, group_m: int) -> None:
-    if num_warps <= 0 or num_stages <= 0 or group_m <= 0:
-        raise ValueError("num_warps, num_stages, and group_m must be positive")
+def _require_positive_launch(
+    *,
+    num_warps: int,
+    num_stages: int,
+    group_m: int,
+    persistent_waves: int,
+) -> None:
+    if num_warps <= 0 or num_stages <= 0 or group_m <= 0 or persistent_waves <= 0:
+        raise ValueError(
+            "num_warps, num_stages, group_m, and persistent_waves must be positive"
+        )
 
 
 def _require_input_precision(input_precision: str) -> None:
@@ -243,7 +260,7 @@ if triton is not None and tl is not None:
         block_k: tl.constexpr,
         input_precision: tl.constexpr,
         group_m: tl.constexpr,
-        num_sms: tl.constexpr,
+        num_programs: tl.constexpr,
     ):
         start_pid = tl.program_id(0)
         num_pid_m = tl.cdiv(m, block_m)
@@ -253,7 +270,7 @@ if triton is not None and tl is not None:
         k_tiles = tl.cdiv(k, block_k)
         offs_k_mask = tl.arange(0, block_k)
 
-        for tile_id in tl.range(start_pid, num_tiles, num_sms, flatten=True):
+        for tile_id in tl.range(start_pid, num_tiles, num_programs, flatten=True):
             pid_m, pid_n = _compute_persistent_pid(
                 tile_id,
                 num_pid_in_group,

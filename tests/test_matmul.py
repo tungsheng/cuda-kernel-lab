@@ -50,6 +50,11 @@ def test_triton_matmul_rejects_unknown_schedule_before_runtime_checks() -> None:
         triton_matmul(None, None, schedule="round-robin")
 
 
+def test_triton_matmul_rejects_invalid_persistent_waves_before_runtime_checks() -> None:
+    with pytest.raises(ValueError, match="persistent_waves"):
+        triton_matmul(None, None, persistent_waves=0)
+
+
 def test_matmul_memory_traffic_estimate() -> None:
     assert memory_traffic_bytes(m=2, n=3, k=4, dtype_size=4) == 104
 
