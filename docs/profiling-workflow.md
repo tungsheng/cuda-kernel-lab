@@ -74,6 +74,12 @@ manifest explicitly:
 Runpod Pods created by `./scripts/up` install and validate Nsight Compute during
 bootstrap unless `--no-install-nsight-compute` is passed.
 
+Matmul profile targets use a direct Python capture harness under Nsight Compute:
+the normal benchmark command first writes the JSONL result, then `ncu` runs
+`.venv/bin/python -m cuda_kernel_lab.profile_capture` with CUDA profiler
+start/stop markers. That keeps Triton JIT warmup outside the profiled region and
+fails the profile when the CSV only reports `No kernels were profiled`.
+
 Add `--include-decode-step` to profile the naive/fused, full-graph, and
 piecewise-graph decode-step modes alongside the standard kernel targets. Use
 `--only-decode-step --with-profiling` when you want only the static and dynamic

@@ -86,7 +86,10 @@ uv run benchmark-compare \
 
 The profile phase reads the run's `h200-matmul-best.json` and profiles those
 exact winner parameters, so the Nsight reports explain the selected configs
-rather than the older fixed matmul probes. To replay only those profiles:
+rather than the older fixed matmul probes. Matmul targets are captured through a
+direct Python harness that warms Triton before enabling CUDA profiler markers,
+which avoids landing Nsight on setup work or missing the profiled kernel. To
+replay only those profiles:
 
 ```bash
 ./scripts/benchmark \

@@ -124,6 +124,12 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
     assert 'HOME=\\"\\$HOME\\"' in result.stdout
     assert 'PATH=\\"\\$PATH\\"' in result.stdout
     assert '\\"\\$\\{ncu_bin\\}\\"' in result.stdout
+    assert "profile_csv_has_metrics" in result.stdout
+    assert "profile_failure_reason" in result.stdout
+    assert "profile_python=\\'.venv/bin/python\\'" in result.stdout
+    assert "cuda_kernel_lab.profile_capture" in result.stdout
+    assert "--profile-from-start\\ off" in result.stdout
+    assert "thenif" not in result.stdout
     assert "gpu__time_duration.sum" in result.stdout
     assert "timeout\\ 120" in result.stdout
     assert "Profile summaries: profiling/reports/test-run" in result.stdout
@@ -324,6 +330,8 @@ def test_benchmark_dry_run_profiles_autotune_winners(tmp_path: Path) -> None:
     assert "--num-warps" in result.stdout
     assert "--num-stages" in result.stdout
     assert "--group-m" in result.stdout
+    assert "cuda_kernel_lab.profile_capture" in result.stdout
+    assert "--profile-from-start\\ off" in result.stdout
     assert "triton-autotune-block-128x128x64-warps-8-stages-4-groupm-8" in result.stdout
 
 
