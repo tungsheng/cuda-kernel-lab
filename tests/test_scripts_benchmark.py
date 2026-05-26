@@ -179,6 +179,47 @@ def test_runpod_up_profile_counters_respects_explicit_cloud_type() -> None:
     assert "--cloud-type SECURE" in result.stdout
 
 
+def test_runpod_up_timing_only_skips_nsight_compute() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/up",
+            "--dry-run",
+            "--timing-only",
+            "--gpu-id",
+            "NVIDIA H200",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert "Run mode: timing-only benchmark Pod" in result.stdout
+    assert "Cloud type: SECURE" in result.stdout
+    assert "Nsight Compute: skip install" in result.stdout
+    assert "Nsight counters: skip access validation" in result.stdout
+    assert "--cloud-type SECURE" in result.stdout
+
+
+def test_runpod_up_timing_only_rejects_profile_counters() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/up",
+            "--dry-run",
+            "--timing-only",
+            "--profile-counters",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "--timing-only cannot be combined with --profile-counters" in result.stderr
+
+
 def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path) -> None:
     connection_file = tmp_path / "runpod.env"
     connection_file.write_text(

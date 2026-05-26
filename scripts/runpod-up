@@ -84,7 +84,10 @@ RUNPOD_NETWORK_VOLUME_ID="${CUDA_KERNEL_LAB_RUNPOD_NETWORK_VOLUME_ID:-}"
 RUNPOD_DATA_CENTER_IDS="${CUDA_KERNEL_LAB_RUNPOD_DATA_CENTER_IDS:-}"
 RUNPOD_TERMINATE_AFTER="${CUDA_KERNEL_LAB_RUNPOD_TERMINATE_AFTER:-}"
 RUNPOD_INSTALL_NCU="${CUDA_KERNEL_LAB_RUNPOD_INSTALL_NCU:-1}"
+RUNPOD_INSTALL_NCU_REQUESTED=0
 RUNPOD_PROFILE_COUNTERS="${CUDA_KERNEL_LAB_RUNPOD_PROFILE_COUNTERS:-0}"
+RUNPOD_TIMING_ONLY="${CUDA_KERNEL_LAB_RUNPOD_TIMING_ONLY:-0}"
+RUNPOD_KEEP_FAILED_POD="${CUDA_KERNEL_LAB_RUNPOD_KEEP_FAILED_POD:-0}"
 RUNPOD_NAME="cuda-kernel-lab-gpu"
 RUNPOD_VOLUME_MOUNT_PATH="/workspace"
 RUNPOD_DOCKER_ARGS="${CUDA_KERNEL_LAB_RUNPOD_DOCKER_ARGS:-}"
@@ -124,6 +127,8 @@ Options:
   --no-install-nsight-compute    Skip Nsight Compute install for benchmark-only Pods.
   --profile-counters             Validate Nsight counter access during bootstrap.
                                   Defaults to COMMUNITY cloud unless --cloud-type is set.
+  --timing-only                  Benchmark timing Pod; skip Nsight install and counter checks.
+  --keep-failed-pod              Do not delete a failed --profile-counters Pod.
   --name <name>                  Pod name. Default: ${RUNPOD_NAME}
   --docker-args <args>           Optional container command arguments.
   --key-file <path>              SSH private key. Default: .runpod/keys/<name>
@@ -206,6 +211,7 @@ parse_args() {
         ;;
       --install-nsight-compute)
         RUNPOD_INSTALL_NCU=1
+        RUNPOD_INSTALL_NCU_REQUESTED=1
         shift
         ;;
       --no-install-nsight-compute)
@@ -214,6 +220,15 @@ parse_args() {
         ;;
       --profile-counters)
         RUNPOD_PROFILE_COUNTERS=1
+        shift
+        ;;
+      --timing-only)
+        RUNPOD_TIMING_ONLY=1
+        RUNPOD_INSTALL_NCU=0
+        shift
+        ;;
+      --keep-failed-pod)
+        RUNPOD_KEEP_FAILED_POD=1
         shift
         ;;
       --name)
@@ -318,6 +333,18 @@ validate_inputs() {
   [[ "${RUNPOD_PROFILE_COUNTERS}" == "0" || "${RUNPOD_PROFILE_COUNTERS}" == "1" ]] || {
     die "CUDA_KERNEL_LAB_RUNPOD_PROFILE_COUNTERS must be 0 or 1"
   }
+  [[ "${RUNPOD_TIMING_ONLY}" == "0" || "${RUNPOD_TIMING_ONLY}" == "1" ]] || {
+    die "CUDA_KERNEL_LAB_RUNPOD_TIMING_ONLY must be 0 or 1"
+  }
+  [[ "${RUNPOD_KEEP_FAILED_POD}" == "0" || "${RUNPOD_KEEP_FAILED_POD}" == "1" ]] || {
+    die "CUDA_KERNEL_LAB_RUNPOD_KEEP_FAILED_POD must be 0 or 1"
+  }
+  if [[ "${RUNPOD_TIMING_ONLY}" == "1" && "${RUNPOD_PROFILE_COUNTERS}" == "1" ]]; then
+    die "--timing-only cannot be combined with --profile-counters"
+  fi
+  if [[ "${RUNPOD_TIMING_ONLY}" == "1" && "${RUNPOD_INSTALL_NCU_REQUESTED}" == "1" ]]; then
+    die "--timing-only cannot be combined with --install-nsight-compute"
+  fi
   if [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" && "${RUNPOD_INSTALL_NCU}" != "1" ]]; then
     die "--profile-counters requires Nsight Compute; remove --no-install-nsight-compute"
   fi
@@ -329,6 +356,10 @@ validate_inputs() {
 }
 
 resolve_profile_defaults() {
+  if [[ "${RUNPOD_TIMING_ONLY}" == "1" ]]; then
+    RUNPOD_INSTALL_NCU=0
+  fi
+
   if [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" && "${RUNPOD_CLOUD_TYPE_SET}" == "0" ]]; then
     RUNPOD_CLOUD_TYPE="COMMUNITY"
   fi
@@ -532,6 +563,7 @@ write_connection_metadata() {
     write_env_var "RUNPOD_NETWORK_VOLUME_ID" "${RUNPOD_NETWORK_VOLUME_ID}"
     write_env_var "RUNPOD_DATA_CENTER_IDS" "${RUNPOD_DATA_CENTER_IDS}"
     write_env_var "RUNPOD_PROFILE_COUNTERS" "${RUNPOD_PROFILE_COUNTERS}"
+    write_env_var "RUNPOD_TIMING_ONLY" "${RUNPOD_TIMING_ONLY}"
     write_env_var "KEY_FILE" "${KEY_FILE}"
     write_env_var "SSH_USER" "${SSH_USER}"
     write_env_var "SSH_HOST" "${SSH_HOST}"
@@ -815,11 +847,36 @@ uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --d
 REMOTE_BOOTSTRAP
 }
 
+cleanup_failed_profile_pod() {
+  [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" ]] || return 0
+  [[ -n "${RUNPOD_POD_ID}" ]] || return 0
+
+  if [[ "${RUNPOD_KEEP_FAILED_POD}" == "1" ]]; then
+    printf 'Bootstrap failed; keeping Runpod Pod %s for inspection because --keep-failed-pod was passed.\n' "${RUNPOD_POD_ID}" >&2
+    return 0
+  fi
+
+  print_stage "deleting failed profile-counter Runpod Pod"
+  if runpodctl pod delete "${RUNPOD_POD_ID}"; then
+    rm -f "${CONNECTION_FILE}"
+    printf 'Deleted failed Runpod Pod %s and removed %s.\n' "${RUNPOD_POD_ID}" "${CONNECTION_FILE}" >&2
+  else
+    printf 'warning: could not delete failed Runpod Pod %s; run ./scripts/down --platform runpod after inspection.\n' "${RUNPOD_POD_ID}" >&2
+  fi
+}
+
 print_launch_summary() {
   runpod_create_args
   printf '\nRunpod launch configuration:\n'
   if [[ "${DRY_RUN}" == "1" ]]; then
     printf '  Mode: dry run; no Runpod commands will run\n'
+  fi
+  if [[ "${RUNPOD_TIMING_ONLY}" == "1" ]]; then
+    printf '  Run mode: timing-only benchmark Pod\n'
+  elif [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" ]]; then
+    printf '  Run mode: profiler-counter validation Pod\n'
+  else
+    printf '  Run mode: benchmark Pod\n'
   fi
   printf '  Pod name: %s\n' "${RUNPOD_NAME}"
   printf '  GPU: %s x%s\n' "${RUNPOD_GPU_ID}" "${RUNPOD_GPU_COUNT}"
@@ -873,6 +930,8 @@ print_ready() {
 }
 
 main() {
+  local bootstrap_status
+
   parse_args "$@"
   resolve_profile_defaults
   resolve_default_key
@@ -895,7 +954,13 @@ main() {
     configure_ssh_args
     wait_for_ssh
     sync_repo
-    bootstrap_remote
+    if bootstrap_remote; then
+      :
+    else
+      bootstrap_status=$?
+      cleanup_failed_profile_pod
+      return "${bootstrap_status}"
+    fi
   else
     print_stage "skipping SSH bootstrap"
   fi

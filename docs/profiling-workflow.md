@@ -76,7 +76,11 @@ counter preflight before running the matrix. Runpod Pods created by
 `--no-install-nsight-compute` is passed. For profile runs, prefer
 `./scripts/up --profile-counters`; it validates NVIDIA performance-counter
 access during bootstrap and defaults the Pod to Community Cloud unless
-`--cloud-type` is explicitly set.
+`--cloud-type` is explicitly set. If that validation fails, the new Pod is
+deleted by default so an expensive failed profile host is not left running; use
+`--keep-failed-pod` only when you need to inspect the failure. For benchmark
+timing runs that do not need Nsight Compute, start the Pod with
+`./scripts/up --timing-only`.
 
 Matmul profile targets use a direct Python capture harness under Nsight Compute:
 the normal benchmark command first writes the JSONL result, then `ncu` runs

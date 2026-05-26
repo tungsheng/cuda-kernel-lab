@@ -120,9 +120,12 @@ depth rather than the default broad smoke matrix:
 ```
 
 Runpod bootstrap installs Nsight Compute by default so profiling can preflight
-`ncu` before the benchmark starts. The H200 suite also includes focused matmul
-tuning rows for the square and asymmetric LLM GEMM shapes, plus grouped
-program-ordering rows in `matmul-llm-impact.jsonl`.
+`ncu` before the benchmark starts. Use `./scripts/up --timing-only` for
+benchmark-only H200 Pods that should skip Nsight setup, and use
+`./scripts/up --profile-counters` for profiler runs that must validate NVIDIA
+performance-counter access during bootstrap. The H200 suite also includes
+focused matmul tuning rows for the square and asymmetric LLM GEMM shapes, plus
+grouped program-ordering rows in `matmul-llm-impact.jsonl`.
 
 Use the H200 autotune suite when the next question is the best stable matmul
 configuration for the measured shapes:

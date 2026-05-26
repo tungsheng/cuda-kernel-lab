@@ -57,6 +57,13 @@ suite with profiling:
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
 ```
 
+For timing-only H200 evidence, skip Nsight setup and counter checks explicitly:
+
+```bash
+./scripts/up --gpu-id "NVIDIA H200" --timing-only
+./scripts/benchmark --run-id <run-id> --suite h200-matmul-autotune
+```
+
 Runpod bootstrap installs and validates Nsight Compute by default so
 `--with-profiling` can collect `ncu` CSVs. Profiling defaults to a lightweight
 counter set, a `120` second timeout, and `--profile-preset auto`; H200 suites
@@ -68,7 +75,9 @@ Use `--profile-counters` for profiler runs. It validates NVIDIA performance
 counter access during bootstrap and defaults the Pod to Community Cloud unless
 `--cloud-type` is explicitly set. If the benchmark preflight reports
 `ERR_NVGPUCTRPERM`, recreate the Pod with `--profile-counters` or choose a
-datacenter/host that allows performance counters.
+datacenter/host that allows performance counters. A failed profile-counter
+bootstrap deletes the newly created Pod and removes `.runpod/connection.env` by
+default; pass `--keep-failed-pod` when you need to inspect that failed Pod.
 
 ```bash
 ./scripts/benchmark \
