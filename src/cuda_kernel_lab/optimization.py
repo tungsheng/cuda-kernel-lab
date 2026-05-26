@@ -162,11 +162,29 @@ def swiglu_optimization(*, backend: str) -> OptimizationTechnique:
 def matmul_optimization(
     *,
     backend: str,
+    schedule: str = "standard",
 ) -> OptimizationTechnique:
     """Return optimization metadata for matmul benchmarks."""
 
     if backend == "torch":
         return torch_reference_baseline()
+
+    if schedule == "persistent":
+        return OptimizationTechnique(
+            method_family="tiling",
+            method_id="triton.persistent_tiled_dot",
+            technique="Persistent tiled dot-product scheduling",
+            hypothesis=(
+                "Keeping a bounded set of Triton programs resident across multiple output "
+                "tiles can reduce launch scheduling overhead and improve H200 SM residency "
+                "for large Tensor Core GEMM shapes."
+            ),
+            expected_profiler_signal=(
+                "Comparable Tensor Core utilization to the tiled-dot baseline with fewer "
+                "active CTAs than output tiles, stable SM occupancy, and lower tail latency "
+                "when tile scheduling overhead matters."
+            ),
+        )
 
     return OptimizationTechnique(
         method_family="tiling",

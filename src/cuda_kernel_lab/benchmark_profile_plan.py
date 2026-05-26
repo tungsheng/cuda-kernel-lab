@@ -127,6 +127,10 @@ def _target_for_winner(
         raise ValueError(f"winner is missing parameter(s): {', '.join(missing)}")
 
     input_precision = str(parameters.get("input_precision") or "tf32")
+    schedule = str(parameters.get("schedule") or "standard")
+    if schedule not in {"standard", "persistent"}:
+        raise ValueError("schedule must be one of: standard, persistent")
+    schedule_suffix = "" if schedule == "standard" else f"-sch{schedule}"
     m, n, k = shape
     return (
         f"{TARGET_PREFIX}-{dtype}-{m}x{n}x{k}"
@@ -136,6 +140,7 @@ def _target_for_winner(
         f"-w{_positive_int(parameters, 'num_warps')}"
         f"-s{_positive_int(parameters, 'num_stages')}"
         f"-gm{_positive_int(parameters, 'group_m')}"
+        f"{schedule_suffix}"
         f"-ip{input_precision}"
     )
 

@@ -253,6 +253,8 @@ def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path)
             "h200-matmul-autotune",
             "--matmul-autotune-shapes",
             "512x11008x4096",
+            "--matmul-autotune-schedules",
+            "standard,persistent",
             "--matmul-autotune-configs",
             "128x128x64x4x4x4,128x128x64x4x4x8",
             "--matmul-autotune-repeats",
@@ -276,8 +278,10 @@ def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path)
         "Matmul autotune configs: 128x128x64x4x4x4,128x128x64x4x4x8"
         in result.stdout
     )
+    assert "Matmul autotune schedules: standard,persistent" in result.stdout
     assert "Matmul autotune repeats: 2" in result.stdout
     assert "--keep-going" in result.stdout
+    assert "--matmul-autotune-schedules" in result.stdout
     assert "--matmul-autotune-configs" in result.stdout
     assert "--include-vector-add-sweep" not in result.stdout
     assert "--include-reduction-sweep" not in result.stdout
@@ -418,6 +422,54 @@ def test_benchmark_dry_run_profiles_autotune_winners(tmp_path: Path) -> None:
     assert "cuda_kernel_lab.profile_capture" in result.stdout
     assert "--profile-from-start\\ off" in result.stdout
     assert "triton-autotune-block-128x128x64-warps-8-stages-4-groupm-8" in result.stdout
+
+
+def test_benchmark_dry_run_profiles_persistent_autotune_target(tmp_path: Path) -> None:
+    connection_file = tmp_path / "runpod.env"
+    connection_file.write_text(
+        "\n".join(
+            [
+                "PROVIDER_PLATFORM=runpod",
+                "RUNPOD_POD_ID=pod123",
+                "RUNPOD_GPU_ID='NVIDIA H200'",
+                "KEY_FILE=/tmp/fake-runpod-key",
+                "SSH_USER=root",
+                "SSH_HOST=203.0.113.10",
+                "SSH_PORT=2222",
+                "REMOTE_DIR=cuda-kernel-lab",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = (
+        "matmul-autotune-bfloat16-512x11008x4096-"
+        "bm128-bn128-bk64-w8-s5-gm8-schpersistent-iptf32"
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/benchmark",
+            "--dry-run",
+            "--platform",
+            "runpod",
+            "--connection-file",
+            str(connection_file),
+            "--run-id",
+            "test-persistent-profile",
+            "--profile-only",
+            "--profile-targets",
+            target,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert target in result.stdout
+    assert "--schedule\\ persistent" in result.stdout
+    assert "schedule-persistent" in result.stdout
 
 
 def test_benchmark_dry_run_preserves_aws_connection(tmp_path: Path) -> None:

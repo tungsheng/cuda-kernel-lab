@@ -45,6 +45,11 @@ def test_matmul_rejects_shape_mismatch() -> None:
         torch_matmul(torch.randn(2, 4), torch.randn(5, 2))
 
 
+def test_triton_matmul_rejects_unknown_schedule_before_runtime_checks() -> None:
+    with pytest.raises(ValueError, match="schedule"):
+        triton_matmul(None, None, schedule="round-robin")
+
+
 def test_matmul_memory_traffic_estimate() -> None:
     assert memory_traffic_bytes(m=2, n=3, k=4, dtype_size=4) == 104
 

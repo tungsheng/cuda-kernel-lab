@@ -122,6 +122,7 @@ retest the remaining H200 matmul gap directly:
   --run-id <run-id> \
   --suite h200-matmul-autotune \
   --matmul-autotune-shapes 512x11008x4096 \
+  --matmul-autotune-schedules standard,persistent \
   --matmul-autotune-configs 128x128x64x4x4x4,128x128x64x4x4x8
 ```
 

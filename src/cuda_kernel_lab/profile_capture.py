@@ -7,7 +7,12 @@ from collections.abc import Callable
 from typing import Any
 
 from cuda_kernel_lab.benchmark_cli import require_torch, resolve_device, resolve_dtype
-from cuda_kernel_lab.benchmarks.matmul import INPUT_PRECISIONS, build_op
+from cuda_kernel_lab.benchmarks.matmul import (
+    DEFAULT_SCHEDULE,
+    INPUT_PRECISIONS,
+    SCHEDULES,
+    build_op,
+)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -35,6 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     matmul.add_argument("--num-stages", type=int, required=True)
     matmul.add_argument("--input-precision", choices=INPUT_PRECISIONS, required=True)
     matmul.add_argument("--group-m", type=int, required=True)
+    matmul.add_argument("--schedule", choices=SCHEDULES, default=DEFAULT_SCHEDULE)
     matmul.add_argument("--warmup", type=int, default=2)
     matmul.add_argument("--profile-iterations", type=int, default=1)
 
@@ -66,6 +72,7 @@ def run_matmul(args: argparse.Namespace) -> None:
         args.num_stages,
         args.input_precision,
         args.group_m,
+        args.schedule,
     )
 
     _run_warmup(fn, torch=torch, device=device, warmup=args.warmup)

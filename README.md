@@ -143,8 +143,10 @@ Nsight summaries are captured for those winners under
 `profiling/reports/<run-id>/`. The default H200 candidate
 set avoids the shared-memory-heavy `block_k=128` tile that exceeds the observed
 H200 per-block shared-memory limit; pass `--matmul-autotune-configs` to
-`scripts/benchmark` when you want to test a custom list. Autotune runs use
-matrix keep-going mode, so an invalid candidate is recorded in
+`scripts/benchmark` when you want to test a custom list. Pass
+`--matmul-autotune-schedules standard,persistent` when the run should compare
+the current tiled-dot scheduler against the H200 persistent scheduler. Autotune
+runs use matrix keep-going mode, so an invalid candidate is recorded in
 `benchmark-failures.json` and the remaining candidates still produce a report.
 
 Use `--platform aws` and explicit key arguments only when you need to align with

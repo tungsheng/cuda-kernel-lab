@@ -61,6 +61,18 @@ def test_load_profile_targets_reads_manifest(tmp_path: Path) -> None:
     )
 
 
+def test_profile_targets_include_non_default_schedule() -> None:
+    winner = _winner("bfloat16", [512, 11008, 4096], group_m=8)
+    parameters = winner["parameters"]
+    assert isinstance(parameters, dict)
+    parameters["schedule"] = "persistent"
+
+    assert benchmark_profile_plan.profile_targets_from_manifest({"winners": [winner]}) == (
+        "matmul-autotune-bfloat16-512x11008x4096-"
+        "bm128-bn128-bk64-w8-s4-gm8-schpersistent-iptf32",
+    )
+
+
 def _winner(dtype: str, shape: list[int], *, group_m: int) -> dict[str, object]:
     return {
         "dtype": dtype,

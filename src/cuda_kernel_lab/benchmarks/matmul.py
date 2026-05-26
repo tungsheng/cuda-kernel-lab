@@ -24,6 +24,8 @@ from cuda_kernel_lab.ops.matmul import flop_count, memory_traffic_bytes
 from cuda_kernel_lab.optimization import matmul_optimization
 
 INPUT_PRECISIONS = ("tf32", "tf32x3", "ieee")
+SCHEDULES = ("standard", "persistent")
+DEFAULT_SCHEDULE = "standard"
 
 
 def main() -> None:
@@ -51,6 +53,7 @@ def main() -> None:
                 num_stages=args.num_stages,
                 input_precision=args.input_precision,
                 group_m=args.group_m,
+                schedule=args.schedule,
                 warmup=args.warmup,
                 iterations=args.iterations,
                 skip_correctness=args.skip_correctness,
@@ -82,6 +85,12 @@ def parse_args() -> argparse.Namespace:
         default="ieee",
         help="Triton tl.dot input precision for float32 inputs.",
     )
+    parser.add_argument(
+        "--schedule",
+        choices=SCHEDULES,
+        default=DEFAULT_SCHEDULE,
+        help="Triton matmul tile scheduler.",
+    )
     add_common_benchmark_args(parser)
     return parser.parse_args()
 
@@ -110,6 +119,7 @@ def run_one(
     num_stages: int,
     input_precision: str,
     group_m: int,
+    schedule: str,
     warmup: int,
     iterations: int,
     skip_correctness: bool,
@@ -123,6 +133,9 @@ def run_one(
     if input_precision not in INPUT_PRECISIONS:
         choices = ", ".join(INPUT_PRECISIONS)
         raise ValueError(f"input_precision must be one of: {choices}")
+    if schedule not in SCHEDULES:
+        choices = ", ".join(SCHEDULES)
+        raise ValueError(f"schedule must be one of: {choices}")
 
     a = torch.randn((m, k), device=device, dtype=dtype)
     b = torch.randn((k, n), device=device, dtype=dtype)
@@ -139,6 +152,7 @@ def run_one(
         num_stages,
         input_precision,
         group_m,
+        schedule,
     )
     correctness = None
     if not skip_correctness:
@@ -154,6 +168,7 @@ def run_one(
             num_stages,
             input_precision,
             group_m,
+            DEFAULT_SCHEDULE,
         )()
         actual = fn()
         rtol, atol = correctness_tolerance(dtype)
@@ -167,6 +182,7 @@ def run_one(
 
     dtype_size = dtype_size_bytes(dtype)
 
+    strategy = _strategy_label(backend=backend, schedule=schedule)
     return benchmark_callable(
         f"{backend}:matmul",
         fn,
@@ -177,11 +193,11 @@ def run_one(
         flops=flop_count(m=m, n=n, k=k),
         warmup=warmup,
         iterations=iterations,
-        strategy="torch-baseline" if backend == "torch" else "triton-tiled-dot",
+        strategy=strategy,
         variant=(
             f"block_m={block_m}, block_n={block_n}, block_k={block_k}, "
             f"num_warps={num_warps}, num_stages={num_stages}, "
-            f"input_precision={input_precision}, group_m={group_m}"
+            f"input_precision={input_precision}, group_m={group_m}, schedule={schedule}"
         ),
         parameters={
             "block_m": block_m,
@@ -191,8 +207,9 @@ def run_one(
             "num_stages": num_stages,
             "input_precision": input_precision,
             "group_m": group_m,
+            "schedule": schedule,
         },
-        optimization=matmul_optimization(backend=backend),
+        optimization=matmul_optimization(backend=backend, schedule=schedule),
         correctness=correctness,
     )
 
@@ -209,6 +226,7 @@ def build_op(
     num_stages: int,
     input_precision: str,
     group_m: int,
+    schedule: str,
 ) -> Callable[[], Any]:
     if backend == "torch":
         from cuda_kernel_lab.kernels.torch_baselines import matmul
@@ -228,10 +246,19 @@ def build_op(
             num_stages=num_stages,
             input_precision=input_precision,
             group_m=group_m,
+            schedule=schedule,
             out=out,
         )
 
     raise ValueError(f"unknown backend: {backend}")
+
+
+def _strategy_label(*, backend: str, schedule: str) -> str:
+    if backend == "torch":
+        return "torch-baseline"
+    if schedule == "persistent":
+        return "triton-persistent-tiled-dot"
+    return "triton-tiled-dot"
 
 
 def print_table(results: list[BenchmarkResult]) -> None:

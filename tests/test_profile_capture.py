@@ -31,6 +31,8 @@ def test_parse_matmul_profile_capture_args() -> None:
             "tf32",
             "--group-m",
             "8",
+            "--schedule",
+            "persistent",
         ]
     )
 
@@ -39,6 +41,7 @@ def test_parse_matmul_profile_capture_args() -> None:
     assert args.n == 4096
     assert args.k == 11008
     assert args.dtype == "bfloat16"
+    assert args.schedule == "persistent"
     assert args.warmup == 2
     assert args.profile_iterations == 1
 
