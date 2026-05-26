@@ -70,9 +70,13 @@ manifest explicitly:
   --profile-autotune-manifest experiments/results/runpod/<run-id>/h200-matmul-best.json
 ```
 
-`scripts/benchmark --with-profiling` checks for `ncu` before running the matrix.
-Runpod Pods created by `./scripts/up` install and validate Nsight Compute during
-bootstrap unless `--no-install-nsight-compute` is passed.
+`scripts/benchmark --with-profiling` checks for `ncu` and runs a small Nsight
+counter preflight before running the matrix. Runpod Pods created by
+`./scripts/up` install and validate Nsight Compute during bootstrap unless
+`--no-install-nsight-compute` is passed. For profile runs, prefer
+`./scripts/up --profile-counters`; it validates NVIDIA performance-counter
+access during bootstrap and defaults the Pod to Community Cloud unless
+`--cloud-type` is explicitly set.
 
 Matmul profile targets use a direct Python capture harness under Nsight Compute:
 the normal benchmark command first writes the JSONL result, then `ncu` runs

@@ -126,6 +126,7 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
     assert '\\"\\$\\{ncu_bin\\}\\"' in result.stdout
     assert "profile_csv_has_metrics" in result.stdout
     assert "profile_failure_reason" in result.stdout
+    assert "profile_counter_preflight" in result.stdout
     assert "profile_python=\\'.venv/bin/python\\'" in result.stdout
     assert "cuda_kernel_lab.profile_capture" in result.stdout
     assert "--profile-from-start\\ off" in result.stdout
@@ -133,6 +134,49 @@ def test_benchmark_dry_run_can_select_h200_roofline_suite(tmp_path: Path) -> Non
     assert "gpu__time_duration.sum" in result.stdout
     assert "timeout\\ 120" in result.stdout
     assert "Profile summaries: profiling/reports/test-run" in result.stdout
+
+
+def test_runpod_up_profile_counters_defaults_to_community() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/up",
+            "--dry-run",
+            "--profile-counters",
+            "--gpu-id",
+            "NVIDIA H200",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert "Cloud type: COMMUNITY" in result.stdout
+    assert "Nsight counters: validate access during bootstrap" in result.stdout
+    assert "--cloud-type COMMUNITY" in result.stdout
+
+
+def test_runpod_up_profile_counters_respects_explicit_cloud_type() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/up",
+            "--dry-run",
+            "--profile-counters",
+            "--cloud-type",
+            "SECURE",
+            "--gpu-id",
+            "NVIDIA H200",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+    assert "Cloud type: SECURE" in result.stdout
+    assert "--cloud-type SECURE" in result.stdout
 
 
 def test_benchmark_dry_run_can_select_h200_matmul_autotune_suite(tmp_path: Path) -> None:

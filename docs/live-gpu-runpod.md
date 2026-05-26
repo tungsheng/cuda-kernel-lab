@@ -53,7 +53,7 @@ For the H200 Tensor Core/roofline path, launch an H200 Pod and run the named
 suite with profiling:
 
 ```bash
-./scripts/up --gpu-id "NVIDIA H200"
+./scripts/up --gpu-id "NVIDIA H200" --profile-counters
 ./scripts/benchmark --run-id <run-id> --suite h200-roofline --with-profiling
 ```
 
@@ -63,6 +63,12 @@ counter set, a `120` second timeout, and `--profile-preset auto`; H200 suites
 resolve that preset to focused matmul gap targets for roofline runs and the
 stable autotune winners for `h200-matmul-autotune` runs. Rerun a single target
 with `--profile-only` when the report points to one kernel:
+
+Use `--profile-counters` for profiler runs. It validates NVIDIA performance
+counter access during bootstrap and defaults the Pod to Community Cloud unless
+`--cloud-type` is explicitly set. If the benchmark preflight reports
+`ERR_NVGPUCTRPERM`, recreate the Pod with `--profile-counters` or choose a
+datacenter/host that allows performance counters.
 
 ```bash
 ./scripts/benchmark \

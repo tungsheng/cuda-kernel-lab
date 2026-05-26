@@ -71,7 +71,11 @@ CONNECTION_FILE="${CUDA_KERNEL_LAB_CONNECTION_FILE:-${STATE_DIR}/connection.env}
 
 RUNPOD_GPU_ID="${CUDA_KERNEL_LAB_RUNPOD_GPU_ID:-NVIDIA L4}"
 RUNPOD_GPU_COUNT=1
-RUNPOD_CLOUD_TYPE="SECURE"
+RUNPOD_CLOUD_TYPE="${CUDA_KERNEL_LAB_RUNPOD_CLOUD_TYPE:-SECURE}"
+RUNPOD_CLOUD_TYPE_SET=0
+if [[ -n "${CUDA_KERNEL_LAB_RUNPOD_CLOUD_TYPE:-}" ]]; then
+  RUNPOD_CLOUD_TYPE_SET=1
+fi
 RUNPOD_IMAGE="${CUDA_KERNEL_LAB_RUNPOD_IMAGE:-runpod/pytorch:1.0.3-cu1281-torch291-ubuntu2404}"
 RUNPOD_TEMPLATE_ID="${CUDA_KERNEL_LAB_RUNPOD_TEMPLATE_ID:-}"
 RUNPOD_CONTAINER_DISK_GB=60
@@ -80,6 +84,7 @@ RUNPOD_NETWORK_VOLUME_ID="${CUDA_KERNEL_LAB_RUNPOD_NETWORK_VOLUME_ID:-}"
 RUNPOD_DATA_CENTER_IDS="${CUDA_KERNEL_LAB_RUNPOD_DATA_CENTER_IDS:-}"
 RUNPOD_TERMINATE_AFTER="${CUDA_KERNEL_LAB_RUNPOD_TERMINATE_AFTER:-}"
 RUNPOD_INSTALL_NCU="${CUDA_KERNEL_LAB_RUNPOD_INSTALL_NCU:-1}"
+RUNPOD_PROFILE_COUNTERS="${CUDA_KERNEL_LAB_RUNPOD_PROFILE_COUNTERS:-0}"
 RUNPOD_NAME="cuda-kernel-lab-gpu"
 RUNPOD_VOLUME_MOUNT_PATH="/workspace"
 RUNPOD_DOCKER_ARGS="${CUDA_KERNEL_LAB_RUNPOD_DOCKER_ARGS:-}"
@@ -117,6 +122,8 @@ Options:
   --terminate-after <value>      Pass-through auto-terminate value for runpodctl.
   --install-nsight-compute       Install and validate ncu during bootstrap. Default.
   --no-install-nsight-compute    Skip Nsight Compute install for benchmark-only Pods.
+  --profile-counters             Validate Nsight counter access during bootstrap.
+                                  Defaults to COMMUNITY cloud unless --cloud-type is set.
   --name <name>                  Pod name. Default: ${RUNPOD_NAME}
   --docker-args <args>           Optional container command arguments.
   --key-file <path>              SSH private key. Default: .runpod/keys/<name>
@@ -159,6 +166,7 @@ parse_args() {
       --cloud-type)
         require_value "$1" "${2:-}"
         RUNPOD_CLOUD_TYPE=${2:-}
+        RUNPOD_CLOUD_TYPE_SET=1
         shift 2
         ;;
       --image)
@@ -202,6 +210,10 @@ parse_args() {
         ;;
       --no-install-nsight-compute)
         RUNPOD_INSTALL_NCU=0
+        shift
+        ;;
+      --profile-counters)
+        RUNPOD_PROFILE_COUNTERS=1
         shift
         ;;
       --name)
@@ -303,11 +315,23 @@ validate_inputs() {
   [[ "${RUNPOD_INSTALL_NCU}" == "0" || "${RUNPOD_INSTALL_NCU}" == "1" ]] || {
     die "CUDA_KERNEL_LAB_RUNPOD_INSTALL_NCU must be 0 or 1"
   }
+  [[ "${RUNPOD_PROFILE_COUNTERS}" == "0" || "${RUNPOD_PROFILE_COUNTERS}" == "1" ]] || {
+    die "CUDA_KERNEL_LAB_RUNPOD_PROFILE_COUNTERS must be 0 or 1"
+  }
+  if [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" && "${RUNPOD_INSTALL_NCU}" != "1" ]]; then
+    die "--profile-counters requires Nsight Compute; remove --no-install-nsight-compute"
+  fi
   [[ -n "${RUNPOD_TEMPLATE_ID}" || -n "${RUNPOD_IMAGE}" ]] || {
     die "either --template-id or --image is required"
   }
   [[ "${SSH_USER}" =~ ^[A-Za-z_][A-Za-z0-9_.-]*[$]?$ ]] || die "--ssh-user contains unsafe characters"
   validate_relative_path "--remote-dir" "${REMOTE_DIR}"
+}
+
+resolve_profile_defaults() {
+  if [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" && "${RUNPOD_CLOUD_TYPE_SET}" == "0" ]]; then
+    RUNPOD_CLOUD_TYPE="COMMUNITY"
+  fi
 }
 
 check_prereqs() {
@@ -507,6 +531,7 @@ write_connection_metadata() {
     write_env_var "RUNPOD_TEMPLATE_ID" "${RUNPOD_TEMPLATE_ID}"
     write_env_var "RUNPOD_NETWORK_VOLUME_ID" "${RUNPOD_NETWORK_VOLUME_ID}"
     write_env_var "RUNPOD_DATA_CENTER_IDS" "${RUNPOD_DATA_CENTER_IDS}"
+    write_env_var "RUNPOD_PROFILE_COUNTERS" "${RUNPOD_PROFILE_COUNTERS}"
     write_env_var "KEY_FILE" "${KEY_FILE}"
     write_env_var "SSH_USER" "${SSH_USER}"
     write_env_var "SSH_HOST" "${SSH_HOST}"
@@ -587,7 +612,7 @@ sync_repo() {
 
 bootstrap_remote() {
   ssh_remote \
-    "REMOTE_DIR=$(shell_quote "${REMOTE_DIR}") CUDA_KERNEL_LAB_INSTALL_NCU=$(shell_quote "${RUNPOD_INSTALL_NCU}") bash -s" \
+    "REMOTE_DIR=$(shell_quote "${REMOTE_DIR}") CUDA_KERNEL_LAB_INSTALL_NCU=$(shell_quote "${RUNPOD_INSTALL_NCU}") CUDA_KERNEL_LAB_PROFILE_COUNTERS=$(shell_quote "${RUNPOD_PROFILE_COUNTERS}") bash -s" \
     <<'REMOTE_BOOTSTRAP'
 set -Eeuo pipefail
 
@@ -713,6 +738,63 @@ install_nsight_compute() {
   "${ncu_bin}" --version | head -n 1
 }
 
+check_ncu_counter_access() {
+  local ncu_bin
+  local python_bin
+  local tmp_dir
+  local out_path
+  local err_path
+
+  ncu_bin=$(find_ncu_bin) || {
+    printf 'error: ncu was not found for profile counter validation\n' >&2
+    return 1
+  }
+  python_bin=".venv/bin/python"
+  if [[ ! -x "${python_bin}" ]]; then
+    python_bin="python"
+  fi
+
+  tmp_dir=$(mktemp -d)
+  out_path="${tmp_dir}/ncu-counter.csv"
+  err_path="${tmp_dir}/ncu-counter.stderr"
+
+  if run_privileged env HOME="${HOME}" PATH="${PATH}" "${ncu_bin}" \
+    --metrics launch__registers_per_thread \
+    --target-processes all \
+    --profile-from-start off \
+    --launch-count 1 \
+    --csv \
+    "${python_bin}" -m cuda_kernel_lab.profile_capture matmul \
+      --m 128 --n 128 --k 128 --dtype float16 --device cuda \
+      --block-m 32 --block-n 32 --block-k 32 \
+      --num-warps 4 --num-stages 3 --input-precision tf32 --group-m 1 \
+      --warmup 1 --profile-iterations 1 \
+      > "${out_path}" 2> "${err_path}"; then
+    :
+  fi
+
+  if grep -q 'ERR_NVGPUCTRPERM' "${out_path}" "${err_path}" 2>/dev/null; then
+    printf 'error: Nsight Compute cannot access NVIDIA performance counters on this Pod (ERR_NVGPUCTRPERM).\n' >&2
+    printf 'error: try ./scripts/up --profile-counters without forcing SECURE, or choose a Runpod host/datacenter that enables profiler counters.\n' >&2
+    cat "${out_path}" >&2
+    cat "${err_path}" >&2
+    rm -rf "${tmp_dir}"
+    return 1
+  fi
+
+  if grep -Eq 'Metric Name|Kernel Name|launch__registers_per_thread' "${out_path}"; then
+    printf 'Nsight counter access: ok\n'
+    rm -rf "${tmp_dir}"
+    return 0
+  fi
+
+  printf 'error: Nsight Compute counter validation did not produce metrics.\n' >&2
+  cat "${out_path}" >&2
+  cat "${err_path}" >&2
+  rm -rf "${tmp_dir}"
+  return 1
+}
+
 cd "${HOME}/${REMOTE_DIR}"
 if ! command -v uv >/dev/null 2>&1; then
   uv_installer=$(mktemp)
@@ -726,6 +808,9 @@ if [[ "${CUDA_KERNEL_LAB_INSTALL_NCU}" == "1" ]]; then
   install_nsight_compute
 fi
 uv run gpu-info
+if [[ "${CUDA_KERNEL_LAB_PROFILE_COUNTERS:-0}" == "1" ]]; then
+  check_ncu_counter_access
+fi
 uv run benchmark-matrix --include-vector-add-sweep --include-reduction-sweep --dry-run
 REMOTE_BOOTSTRAP
 }
@@ -760,6 +845,11 @@ print_launch_summary() {
   else
     printf '  Nsight Compute: skip install\n'
   fi
+  if [[ "${RUNPOD_PROFILE_COUNTERS}" == "1" ]]; then
+    printf '  Nsight counters: validate access during bootstrap\n'
+  else
+    printf '  Nsight counters: skip access validation\n'
+  fi
   printf '  SSH key file: %s\n' "${KEY_FILE}"
   printf '  Remote repo: ~/%s\n' "${REMOTE_DIR}"
   printf '  Connection metadata: %s\n' "${CONNECTION_FILE}"
@@ -784,6 +874,7 @@ print_ready() {
 
 main() {
   parse_args "$@"
+  resolve_profile_defaults
   resolve_default_key
   validate_inputs
   check_prereqs

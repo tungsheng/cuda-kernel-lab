@@ -873,6 +873,10 @@ remote_profile_failure_reason_command() {
   printf '%s' "profile_failure_reason() { local csv_path=\$1; local stderr_path=\$2; if grep -q 'ERR_NVGPUCTRPERM' \"\${csv_path}\" \"\${stderr_path}\" 2>/dev/null; then printf 'Nsight Compute could not access NVIDIA performance counters (ERR_NVGPUCTRPERM). Use a Runpod host/cloud configuration with profiling counters enabled, or run benchmark timing without Nsight counters on this Pod.'; elif grep -q 'No kernels were profiled' \"\${csv_path}\" \"\${stderr_path}\" 2>/dev/null; then printf 'Nsight Compute ran but captured no kernels.'; else printf 'See the Nsight CSV and stderr files for details.'; fi; }"
 }
 
+remote_profile_counter_preflight_command() {
+  printf '%s' "profile_counter_preflight() { local tmp_dir out_path err_path; tmp_dir=\$(mktemp -d); out_path=\"\${tmp_dir}/ncu-counter.csv\"; err_path=\"\${tmp_dir}/ncu-counter.stderr\"; if \${ncu_runner} HOME=\"\$HOME\" PATH=\"\$PATH\" \"\${ncu_bin}\" --metrics launch__registers_per_thread --target-processes all --profile-from-start off --launch-count 1 --csv \"\${profile_python}\" -m cuda_kernel_lab.profile_capture matmul --m 128 --n 128 --k 128 --dtype float16 --device cuda --block-m 32 --block-n 32 --block-k 32 --num-warps 4 --num-stages 3 --input-precision tf32 --group-m 1 --warmup 1 --profile-iterations 1 > \"\${out_path}\" 2> \"\${err_path}\"; then :; fi; if grep -q 'ERR_NVGPUCTRPERM' \"\${out_path}\" \"\${err_path}\" 2>/dev/null; then printf 'error: Nsight Compute cannot access NVIDIA performance counters on this host (ERR_NVGPUCTRPERM). Recreate the Runpod Pod with ./scripts/up --profile-counters, or choose a cloud/datacenter configuration that enables profiling counters.\\n' >&2; cat \"\${out_path}\" >&2; cat \"\${err_path}\" >&2; rm -rf \"\${tmp_dir}\"; return 1; fi; if grep -Eq 'Metric Name|Kernel Name|launch__registers_per_thread' \"\${out_path}\"; then printf 'Nsight counter preflight: ok\\n' >&2; rm -rf \"\${tmp_dir}\"; return 0; fi; printf 'error: Nsight Compute counter preflight did not produce metrics.\\n' >&2; cat \"\${out_path}\" >&2; cat \"\${err_path}\" >&2; rm -rf \"\${tmp_dir}\"; return 1; }"
+}
+
 profile_ncu_args() {
   local metrics
 
@@ -1014,9 +1018,14 @@ remote_profile_preflight_command() {
   command="cd ~/${REMOTE_DIR}"
   command+=" && export PATH=\"\$HOME/.local/bin:\$PATH:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\""
   command+="; $(remote_ncu_finder_command)"
+  command+="; $(remote_profile_counter_preflight_command)"
   command+="; ncu_bin=\$(find_ncu_bin || true)"
   command+="; if [ -z \"\${ncu_bin}\" ]; then printf 'error: ncu was not found on the remote host. Recreate the Pod with ./scripts/up or install Nsight Compute before --with-profiling.\\n' >&2; exit 1; fi"
   command+="; \"\${ncu_bin}\" --version | head -n 1 >/dev/null"
+  command+="; profile_python='.venv/bin/python'"
+  command+="; if [ ! -x \"\${profile_python}\" ]; then profile_python='python'; fi"
+  command+="; if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then ncu_runner='sudo -n env'; elif [ \"\$(id -u)\" = '0' ]; then ncu_runner='env'; else printf 'error: passwordless sudo or root is required to access NVIDIA performance counters.\\n' >&2; exit 1; fi"
+  command+="; profile_counter_preflight"
 
   printf '%s\n' "${command}"
 }
