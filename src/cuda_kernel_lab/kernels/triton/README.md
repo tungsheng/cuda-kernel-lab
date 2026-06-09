@@ -1,20 +1,20 @@
 # Triton Kernels
 
-This directory contains Triton implementations of each primitive.
+This directory contains Triton implementations used by the benchmark workflows.
 
-Current implementation:
+Implemented tracks:
 
 1. Memory bandwidth primitives: `copy`, `scale`, `vector_add`, `reduction_sum`
 2. Fused row-wise softmax
 3. Row-wise RMSNorm and LayerNorm forward kernels
 4. Fused SwiGLU elementwise activation
-5. Tiled matmul progression kernel
+5. Tiled matmul progression with tile and launch sweeps
 
-Planned order:
+Active validation tracks:
 
-1. Tensor Core matmul validation with tile and launch sweeps
-2. Paged KV lookup
-3. Decode attention microkernel
+1. Tensor Core matmul validation with profiler counters
+2. Contiguous KV-cache attention baseline context
+3. Synthetic decode-step graph replay around fused Triton kernels
 
-Use `--backend triton` in the benchmark commands when you want to isolate these
-implementations from PyTorch baselines.
+Use `--backend triton` when a benchmark should isolate these implementations
+from PyTorch baselines.

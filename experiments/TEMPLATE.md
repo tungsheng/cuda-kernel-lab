@@ -4,7 +4,16 @@
 
 What are you trying to learn?
 
-## Optimization Technique
+## Setup
+
+- Command:
+- Result file:
+- Device:
+- Shape and dtype:
+- Backend comparison:
+- Git commit:
+
+## Technique
 
 - Method family:
 - Technique:
@@ -13,38 +22,17 @@ What are you trying to learn?
 - Knobs changed:
 - Expected profiler signal:
 
-## Command
-
-```bash
-
-```
-
-## Environment
-
-- Device:
-- Driver/CUDA:
-- Python:
-- PyTorch:
-- Triton:
-- Git commit:
-
-## Shape
-
-- Operation:
-- Backend:
-- Shape:
-- Dtype:
-- Warmup:
-- Iterations:
-
 ## Result
 
-- Result file:
-- p50:
-- p95:
-- p99:
+- Correctness:
+- p50 / p95 / p99:
 - GB/s:
 - TFLOP/s:
+- Tail behavior:
+
+## Interpretation
+
+What changed, why did it move, and did the technique explain the result?
 
 ## Profiler Notes
 
@@ -53,14 +41,6 @@ Only fill this in when profiler data was collected. Use
 
 - Key counters:
 - Confirmation or surprise:
-
-## Observation
-
-What happened?
-
-## Interpretation
-
-Why does it look that way? Did the technique explain the metric change?
 
 ## Next Question
 

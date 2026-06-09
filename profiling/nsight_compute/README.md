@@ -1,19 +1,16 @@
-# Nsight Compute
+# Nsight Compute Artifacts
 
-Store Nsight Compute command notes and small exported summaries here.
+Store small Nsight Compute CSV exports, stderr logs, and benchmark logs here
+when they support a compact profiler report.
 
-Large binary profiler captures are ignored by default. Prefer committing compact
-text summaries in `profiling/reports/` using `profiling/reports/TEMPLATE.md`.
+Large binary profiler captures are ignored by default. Prefer committing the
+human-readable conclusion in `profiling/reports/` with
+`profiling/reports/TEMPLATE.md`.
 
-Example command shape:
-
-```bash
-sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
-  uv run benchmark-memory --backend triton --device cuda --op vector_add
-```
-
-When exporting a small text or CSV summary, convert it with:
+Convert a small export into a starter note with:
 
 ```bash
-uv run nsight-summary --input profiling/nsight_compute/vector-add.csv --output profiling/reports/vector-add-a10g.md
+uv run nsight-summary \
+  --input profiling/nsight_compute/vector-add.csv \
+  --output profiling/reports/vector-add-a10g.md
 ```

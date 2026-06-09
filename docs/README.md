@@ -1,25 +1,32 @@
 # Documentation
 
-Use the root README to get running. Use these docs when you need the method,
-context, or reporting shape behind a benchmark.
+Use the root README to get running. Use this map when you need the method,
+commands, or interpretation rules behind a benchmark.
 
-## Start Here
+## Start
 
-- [Benchmark Workflow](benchmark-workflow.md): run benchmarks and save JSONL
-  records.
-- [Live GPU On Runpod](live-gpu-runpod.md): launch a disposable Runpod Pod for
-  real CUDA measurements.
-- [Live GPU On AWS EC2](live-gpu-aws-ec2.md): legacy provider fallback using a
-  disposable `g5.xlarge` host in `us-west-2`.
-- [Interpreting Results](interpreting-results.md): read latency, bandwidth, and
-  traffic-model columns.
-- [Optimization Techniques](optimization-techniques.md): name the concrete
-  method, hypothesis, knobs, and profiler signal for each experiment.
-- [Optimization Strategies](optimization-strategies.md): compare a baseline to
-  a kernel change with evidence.
-- [Profiling Workflow](profiling-workflow.md): validate benchmark conclusions
-  with compact profiler notes.
-- [Milestones](milestones.md): project roadmap and current implementation status.
+- [Project Architecture](project-architecture.md): the evidence loop, track
+  boundaries, and artifact locations.
+- [Benchmark Workflow](benchmark-workflow.md): local benchmark commands,
+  matrix suites, output files, and result promotion.
+- [Live GPU On Runpod](live-gpu-runpod.md): the default disposable GPU provider
+  lifecycle and provider-specific overrides.
+
+## Run GPU Benchmarks
+
+- [Profiling Workflow](profiling-workflow.md): Nsight setup, presets,
+  profile-only replay, and compact profiler notes.
+- [Live GPU On AWS EC2](live-gpu-aws-ec2.md): legacy `g5.xlarge` fallback for
+  historical A10G comparisons or Terraform inspection.
+
+## Interpret Evidence
+
+- [Interpreting Results](interpreting-results.md): latency, bandwidth,
+  TFLOP/s, traffic-model, and decode dynamic fields.
+- [Optimization Techniques](optimization-techniques.md): method family,
+  technique, hypothesis, knobs, and expected profiler signal.
+- [Optimization Strategies](optimization-strategies.md): comparison patterns
+  and recommended evidence tracks.
 
 ## Concept Notes
 
@@ -32,7 +39,9 @@ context, or reporting shape behind a benchmark.
 - [KV Cache Layout](concepts/kv-cache-layout.md)
 - [Kernel/System Boundary](concepts/kernel-system-boundary.md)
 
-## Rule Of Thumb
+## Reference
+
+- [Milestones](milestones.md): roadmap and implementation status.
 
 Keep commands in workflow docs, interpretation in concept docs, and raw
 observations in experiment or profiling notes.

@@ -4,26 +4,18 @@
 
 One sentence with the conclusion.
 
-## Benchmark Context
+## Context
 
-- Command:
+- Benchmark command:
 - JSONL result:
-- Operation:
-- Backend:
-- Method family:
-- Optimization technique:
+- Profiler command:
+- Operation/backend:
+- Shape and dtype:
+- Device:
+- Method family and technique:
 - Hypothesis:
 - Knobs changed:
-- Shape:
-- Dtype:
-- Device:
 - Git commit:
-
-## Profiler Command
-
-```bash
-
-```
 
 ## Key Metrics
 
@@ -40,8 +32,9 @@ Record only counters that affect the conclusion.
 
 ## Interpretation
 
-Is the kernel memory-bound or compute-bound? Did profiler counters confirm the
-benchmark traffic model and the optimization technique hypothesis?
+Did profiler counters confirm the benchmark traffic model and the technique
+hypothesis? Is the kernel memory-bound, compute-bound, launch-bound, or limited
+by another resource?
 
 ## Follow-Up
 

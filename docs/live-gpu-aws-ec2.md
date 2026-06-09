@@ -1,10 +1,7 @@
 # Legacy Live GPU On AWS EC2
 
-Runpod is the default live-GPU provider. Use AWS EC2 for disposable single-GPU
-benchmark evidence when you need to compare against historical A10G results or
-exercise the Terraform fallback. The normal path is a three-step loop: start a
-`g5.xlarge`, run one or more benchmark experiments, and tear the host down when
-you are done.
+Runpod is the default live-GPU provider. Use AWS EC2 only when you need to
+compare against historical A10G evidence or inspect the Terraform fallback.
 
 ## Defaults
 
@@ -21,10 +18,10 @@ you are done.
 - Terraform `>= 1.6`
 - AWS credentials and EC2 GPU quota in `us-west-2`
 - local `aws`, `ssh`, and `tar`
-- passwordless `sudo` on the remote host for Nsight Compute performance
-  counters when using `--with-profiling`
+- passwordless `sudo` on the remote host for Nsight Compute counters when using
+  `--with-profiling`
 
-## Recommended Flow
+## Provider Loop
 
 Preview the host launch without touching AWS:
 
@@ -32,58 +29,19 @@ Preview the host launch without touching AWS:
 ./scripts/up --platform aws --dry-run
 ```
 
-Start the GPU host. With no key arguments, `scripts/up` creates or reuses the
-default project key at `.aws-gpu/keys/cuda-kernel-lab-${USER}.pem` and writes
-connection metadata to `.aws-gpu/connection.env`.
+Start the GPU host. With no key arguments, the script creates or reuses the
+project key under `.aws-gpu/keys/` and writes `.aws-gpu/connection.env`:
 
 ```bash
 ./scripts/up --platform aws
 ```
 
-Run a benchmark against the host:
+Run one or more benchmark experiments:
 
 ```bash
 ./scripts/benchmark --platform aws --run-id <run-id>
-```
-
-Run more benchmark experiments without another Terraform apply/destroy cycle:
-
-```bash
 ./scripts/benchmark --platform aws --run-id <second-run-id> --include-matmul-sweep
 ```
-
-For the current decode-step graph and dynamic batching track, skip the full
-matrix and run the resident head-major KV path directly:
-
-```bash
-./scripts/benchmark --platform aws \
-  --run-id <run-id> \
-  --only-decode-step \
-  --include-decode-bucket-sweep \
-  --include-decode-tail-sweep \
-  --decode-attention-backend sdpa-head-major \
-  --decode-dynamic-copy-mode resident \
-  --decode-piecewise-post-mode eager \
-  --decode-orchestration-timing off \
-  --decode-tail-buckets '1,2,3,4,5,6,7,8'
-```
-
-Use the broader evidence bundle when you want matmul, RMSNorm, attention, and
-decode-step evidence in one run:
-
-```bash
-./scripts/benchmark --platform aws \
-  --run-id <run-id> \
-  --include-matmul-sweep \
-  --include-rmsnorm-shape-sweep \
-  --include-attention-baseline \
-  --include-decode-step \
-  --with-profiling
-```
-
-If you edit local kernels or benchmark code while the host is still running,
-rerun `./scripts/up --platform aws` to resync and re-bootstrap the remote repo
-before the next `./scripts/benchmark --platform aws`.
 
 Tear the host down:
 
@@ -92,72 +50,35 @@ Tear the host down:
 ```
 
 The default teardown removes generated Terraform variables and generated
-connection metadata, so the next `./scripts/up --platform aws` starts with
-fresh host outputs.
+connection metadata. The reusable dev key under `.aws-gpu/keys/` is left in
+place.
 
-If SSH times out on a network where HTTPS and SSH use different carrier NAT
-egress addresses, override the auto-discovered `/32` with the SSH-visible CIDR:
+## Useful Overrides
 
-```bash
-./scripts/up --platform aws --ingress-cidr <ssh-egress-cidr>
-```
-
-Add matmul progression numbers when needed:
-
-```bash
-./scripts/benchmark --platform aws --run-id <run-id> --include-matmul
-```
-
-Collect the next recommended matmul evidence set, including the float16
-tile-shape plus launch-configuration sweep and a focused matmul Nsight Compute
-profile:
-
-```bash
-./scripts/benchmark --platform aws --run-id <run-id> --include-matmul-sweep --with-profiling
-```
-
-Capture focused Nsight Compute evidence for the current memory bottleneck, a
-known fused-kernel win, and the current matmul tiled-dot target:
-
-```bash
-./scripts/benchmark --platform aws --run-id <run-id> --with-profiling
-```
-
-Use an existing EC2 key pair only when you need to keep SSH access aligned with
-your own key inventory:
+Use an existing EC2 key pair only when SSH access must align with your own key
+inventory:
 
 ```bash
 ./scripts/up --platform aws \
   --key-name <key-pair-name> \
   --key-file <key-file.pem>
-./scripts/benchmark --platform aws --run-id <run-id> --key-file <key-file.pem>
-./scripts/down --platform aws
 ```
 
-## Manual Host Flow
-
-Use `scripts/up --platform aws` and `scripts/down --platform aws` when you want
-to inspect or operate the host manually:
+If SSH times out because HTTPS IP discovery and TCP/22 use different NAT egress
+addresses, pass the SSH-visible CIDR:
 
 ```bash
-./scripts/up --platform aws
-ssh -i .aws-gpu/keys/cuda-kernel-lab-${USER}.pem ubuntu@<public-ip>
-cd ~/cuda-kernel-lab
-uv run benchmark-matrix \
-  --output-dir experiments/results/aws-ec2/<run-id> \
-  --include-vector-add-sweep \
-  --include-reduction-sweep \
-  --include-matmul-sweep \
-  --include-rmsnorm-shape-sweep \
-  --include-attention-baseline \
-  --include-decode-step
-uv run benchmark-report --input-dir experiments/results/aws-ec2/<run-id>
-./scripts/down --platform aws
+./scripts/up --platform aws --ingress-cidr <ssh-egress-cidr>
 ```
 
-Use `./scripts/up --platform aws --skip-bootstrap` for an infra-only host without SSH
-bootstrap. Use direct Terraform only when you need to inspect or customize the
-plan:
+Use `--skip-bootstrap` for an infra-only host without SSH sync or dependency
+installation:
+
+```bash
+./scripts/up --platform aws --skip-bootstrap
+```
+
+Use direct Terraform only when you need to inspect or customize the plan:
 
 ```bash
 terraform -chdir=infra/env/aws-gpu init
@@ -169,71 +90,17 @@ terraform -chdir=infra/env/aws-gpu apply tfplan
 terraform -chdir=infra/env/aws-gpu destroy
 ```
 
-## Cleanup Verification
-
-After `./scripts/down --platform aws`, confirm local Terraform state is empty:
+After manual teardown, confirm local Terraform state is empty:
 
 ```bash
 terraform -chdir=infra/env/aws-gpu state list
 ```
 
-The reusable dev key under `.aws-gpu/keys/` is left in place for the next
-`./scripts/up --platform aws`.
+## Benchmark And Profiling Notes
 
-## Profiler Starting Point
+Use the same benchmark flags documented in [Benchmark Workflow](benchmark-workflow.md),
+but add `--platform aws` to shell-script commands.
 
-Prefer `--with-profiling` when a benchmark needs profiler evidence. It captures:
-
-- `memory-vector-add-float32`
-- `memory-reduction-iterative-float32`
-- `memory-reduction-two-pass-float32`
-- `norms-rmsnorm-float16`
-- `matmul-tiled-float16`
-
-The matmul target uses the current Tensor Core candidate launch settings from
-the benchmark CLI and should be read alongside the `--include-matmul-sweep`
-rows before promoting a final tile choice.
-
-When `--include-decode-step` or `--only-decode-step` is set, profiling adds the
-fixed-shape synthetic decode-step modes plus dynamic eager, ordered piecewise
-graph, and same-stream piecewise graph targets. Use those Nsight summaries for
-the occupancy and HBM-counter side of the graph replay comparison. The matrix
-also writes dynamic traces for graph hit rate, padding waste, scheduler cost,
-phase and bucket latency, and tail behavior.
-
-Use dense `1,2,3,4,5,6,7,8` buckets for the current resident upper-bound path.
-Use `--decode-tail-buckets '1,2,4,8;1,2,3,4,6,8'` to compare coarser policies.
-Use `--decode-dynamic-copy-mode x-only` when only the current activation should
-be staged. Turn `--decode-orchestration-timing` back on when you need
-per-region host timing probes.
-
-The benchmark script runs `ncu` through passwordless `sudo` because NVIDIA performance
-counters are restricted for normal users on the AWS Deep Learning AMI.
-
-For manual host work, start with the memory bottleneck and the strongest fused
-win:
-
-```bash
-sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
-  uv run benchmark-memory --backend triton --device cuda --op vector_add \
-  --dtype float32 \
-  --output experiments/results/aws-ec2/<run-id>-profiled/memory-profiled.jsonl
-sudo -n env HOME="$HOME" PATH="$PATH" ncu --set full --target-processes all \
-  uv run benchmark-norms --backend triton --device cuda --op rmsnorm \
-  --rows 4096 --cols 4096 --dtype float16 \
-  --output experiments/results/aws-ec2/<run-id>-profiled/rmsnorm-profiled.jsonl
-```
-
-Save compact profiler notes under `profiling/reports/`.
-
-## SSH Timeout Troubleshooting
-
-`scripts/up --platform aws` discovers the default SSH ingress CIDR with
-`https://checkip.amazonaws.com` and opens only that IPv4 `/32`. Some networks
-route HTTPS discovery and TCP/22 through different NAT addresses. In that case
-the EC2 instance boots normally, `sshd` starts, but SSH attempts time out
-because the security group never sees traffic from the discovered `/32`.
-
-Use `./scripts/up --platform aws --ingress-cidr <cidr>` when your SSH egress address is known
-to differ from HTTPS discovery. Keep the CIDR as narrow as your network allows;
-avoid opening SSH broadly.
+When `--with-profiling` is set, the benchmark script runs `ncu` through
+passwordless `sudo` because NVIDIA performance counters are restricted for
+normal users on the AWS Deep Learning AMI.

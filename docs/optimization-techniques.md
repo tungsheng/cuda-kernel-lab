@@ -66,8 +66,8 @@ memory, registers, warp count, and pipeline stages explain the tile-shape
 tradeoff.
 
 Attention experiments should first pin down the PyTorch contiguous-KV baseline
-and shape sensitivity. A future custom kernel should be evaluated as a fused
-decode target where K/V cache reads dominate traffic and score/probability
+and shape sensitivity. Custom decode kernels should be evaluated as fused decode
+targets where K/V cache reads dominate traffic and score/probability
 intermediate writes are avoided.
 
 CUDA Graph experiments should be read as launch-path tests. Compare host wall

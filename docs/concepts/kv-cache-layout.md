@@ -13,12 +13,12 @@ End-to-end serving and scheduler experiments belong in `gpu-inference-lab`.
 
 ## Experiments
 
-Active baseline:
+Implemented baseline:
 
 - contiguous decode attention benchmark with PyTorch over
   `(seq_len, num_heads, head_dim)` K/V caches
 
-Planned experiments:
+Next layout questions:
 
 - contiguous lookup benchmark
 - paged lookup benchmark

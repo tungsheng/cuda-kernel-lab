@@ -54,9 +54,9 @@ design, but the row still reports total host step and scheduler timing. Use
 `orchestration_timing=on` first to find a bottleneck, then turn it off for the
 production-like timing comparison.
 
-Recent A10G decode evidence in
+Saved A10G decode evidence in
 `experiments/reports/aws-ec2/2026-05-22-round12-kv-active-views.md` shows the
-best saved dynamic path as `dynamic-piecewise-graph-same-stream` with
+saved dynamic path as `dynamic-piecewise-graph-same-stream` with
 `sdpa-head-major`, `resident`, eager post-add, orchestration timing off, and
 dense `1,2,3,4,5,6,7,8` buckets. The three tail seeds landed around
 `0.155-0.158 ms` p50 and `0.228-0.232 ms` p95 with zero padding.
