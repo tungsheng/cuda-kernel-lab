@@ -9,7 +9,7 @@ to show which strategy moved which metric, and why.
 Use this ladder as a menu, not a checklist:
 
 1. PyTorch baseline
-2. naive custom kernel
+2. simplest implemented Triton kernel
 3. coalesced memory access
 4. vectorized loads and stores
 5. warp-level or block-level reduction
@@ -71,12 +71,13 @@ before claiming Tensor Core utilization.
 
 Attention track: start with the PyTorch contiguous-KV baseline, vary sequence
 length/head shape, and compare analytical traffic against the fused decode
-target before adding custom addressing or fusion.
+target before adding future custom addressing or attention fusion.
 
 CUDA Graph replay track: use synthetic `decode_step` rows when the question is
 launch overhead, graph reuse, dynamic-shape buckets, padding waste, or hot-loop
 timing. Treat these rows as kernel-path evidence, not service-level serving
-results.
+results. In fused decode-step rows, Triton fuses the RMSNorm and SwiGLU regions;
+attention is still measured through the configured PyTorch attention backend.
 
 Saved A10G decode evidence from `2026-05-22-round12-kv-active-views` showed the
 same-stream dynamic piecewise graph path around `0.155-0.158 ms` p50 and

@@ -5,14 +5,17 @@ types, layouts, and tile shapes.
 
 ## When They Matter
 
-Tensor Core work belongs in the matmul milestones. The comparison should show
-the progression:
+Tensor Core work belongs in the matmul milestones. In this repo, the current
+comparison path is:
 
 1. PyTorch/cuBLAS baseline
-2. naive custom matmul
-3. shared-memory tiled matmul
-4. Triton matmul
-5. Tensor Core-aware matmul
+2. Triton tiled `tl.dot` matmul
+3. tile-shape, launch-configuration, and persistent-schedule sweeps
+4. profiler-backed Tensor Core validation
+
+Native CUDA C++ matmul variants such as naive or shared-memory tiled kernels are
+useful comparison points, but they are not part of the current implemented
+kernel tree.
 
 ## What To Record
 

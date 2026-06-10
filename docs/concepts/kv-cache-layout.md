@@ -24,7 +24,7 @@ Next layout questions:
 - paged lookup benchmark
 - block allocator simulation
 - fragmentation benchmark
-- custom decode attention over contiguous and paged cache layouts
+- future custom decode attention over contiguous and paged cache layouts
 
 Record for each experiment:
 

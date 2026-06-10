@@ -17,7 +17,7 @@ flowchart TD
 
     Q --> M["Memory + Fusion primitives<br/>copy, scale, vector_add<br/>reductions, softmax<br/>RMSNorm, LayerNorm, SwiGLU"]
     Q --> G["Matmul + Tensor Core validation<br/>PyTorch/cuBLAS baseline<br/>Triton tl.dot tiling<br/>tile and launch sweeps<br/>TFLOP/s + profiler counters"]
-    Q --> D["Attention + Synthetic Decode replay<br/>contiguous KV baseline<br/>eager vs fused decode<br/>CUDA Graph replay<br/>piecewise graph buckets<br/>padding and tail latency"]
+    Q --> D["Attention + Synthetic Decode replay<br/>contiguous KV baseline<br/>naive vs fused pre/post regions<br/>CUDA Graph replay<br/>piecewise graph buckets<br/>padding and tail latency"]
 
     M --> E["Benchmark evidence<br/>correctness checks<br/>p50 / p95 / p99<br/>bytes moved, GB/s<br/>FLOPs, TFLOP/s<br/>JSONL records"]
     G --> E
@@ -38,10 +38,12 @@ The matmul track moves from tiled `tl.dot` reuse into Tensor Core validation.
 Treat TFLOP/s as a benchmark signal, then use profiler evidence before claiming
 Tensor Core utilization.
 
-The attention and decode track uses a contiguous KV-cache attention baseline and
-synthetic decode-step replay to study launch overhead, CUDA Graph reuse,
-dynamic-shape buckets, padding waste, and hot-loop timing. It should be read as
-kernel-path evidence, not as a serving-system benchmark.
+The attention and decode track uses a contiguous KV-cache PyTorch attention
+baseline and synthetic decode-step replay to study launch overhead, CUDA Graph
+reuse, dynamic-shape buckets, padding waste, and hot-loop timing. In the fused
+decode-step variants, Triton handles the RMSNorm and SwiGLU regions while
+attention stays in the PyTorch/SDPA path. Read these results as kernel-path
+evidence, not as a serving-system benchmark.
 
 ## Evidence Artifacts
 

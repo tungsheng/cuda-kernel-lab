@@ -14,8 +14,8 @@ the lesson is always the optimization strategy and the benchmark evidence.
 | 5 | SwiGLU elementwise fusion | implemented |
 | 6 | matmul tiling progression | tile-shape sweep added |
 | 7 | Tensor Core matmul | launch sweep active |
-| 8 | attention microkernel optimization | PyTorch contiguous-KV baseline added |
-| 9 | CUDA Graph replay and dynamic decode scheduling | resident same-stream piecewise graph path benchmarked |
+| 8 | attention baseline and KV-cache layout | PyTorch contiguous-KV baseline added |
+| 9 | CUDA Graph replay and synthetic dynamic decode traces | resident same-stream piecewise graph path benchmarked |
 
 ## Success Criteria
 
@@ -32,7 +32,7 @@ pattern.
 
 ## Saved Decode Evidence
 
-The saved A10G decode evidence in
+The saved A10G decode evidence is in
 `experiments/reports/aws-ec2/2026-05-22-round12-kv-active-views.md`. It
 benchmarks resident head-major KV views, same-stream piecewise CUDA Graph
 replay, eager post-add, dense batch buckets, and hot-loop timing with

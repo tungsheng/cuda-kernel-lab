@@ -13,6 +13,7 @@ inference serving lab.
 - occupancy and register tradeoffs
 - Tensor Core matmul strategy
 - profiler-backed kernel interpretation
+- synthetic decode-step replay for measuring kernel and launch behavior
 
 ## Out Of Scope Here
 
@@ -32,3 +33,7 @@ belongs here.
 
 If the question is "How does this affect users, queues, batches, or serving
 throughput?", it belongs in `gpu-inference-lab`.
+
+Synthetic dynamic-shape traces are in scope when they replay kernel paths,
+bucket choices, or CUDA Graph launch behavior. Service-level policies that
+decide how real requests wait, batch, or shed load are out of scope.

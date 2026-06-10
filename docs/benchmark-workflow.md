@@ -25,8 +25,10 @@ uv run gpu-info
 
 ## Primitive Benchmarks
 
-Use `--backend all` when comparing PyTorch controls against custom kernels. Use
-`--backend torch` or `--backend triton` when isolating one implementation.
+Use `--backend all` when comparing PyTorch controls against implemented Triton
+kernels. Use `--backend torch` or `--backend triton` when isolating one
+implementation. The attention benchmark currently supports the PyTorch
+contiguous-KV baseline only.
 
 ```bash
 uv run benchmark-memory --backend all --device cuda --op all
@@ -74,8 +76,8 @@ Optional matrix flags:
 - `--include-rmsnorm-shape-sweep`: hidden-size and batch-size coverage for the
   normalization fusion track.
 - `--include-attention-baseline`: contiguous KV-cache decode-attention baseline.
-- `--include-decode-step`: synthetic eager, graph, piecewise graph, and dynamic
-  trace rows.
+- `--include-decode-step`: synthetic naive/fused eager, whole-step graph,
+  piecewise graph, and dynamic trace rows.
 
 ## Focused Suites
 
@@ -94,6 +96,11 @@ uv run benchmark-matrix \
   --decode-orchestration-timing off \
   --decode-tail-buckets '1,2,3,4,5,6,7,8'
 ```
+
+In this focused path, `sdpa-head-major` means PyTorch SDPA over resident
+head-major K/V views. The fused decode-step variants fuse the synthetic RMSNorm
+and SwiGLU regions with Triton kernels; attention remains an eager PyTorch/SDPA
+region between captured graph segments.
 
 Use the H200 roofline suite for larger FP16/BF16 matmul rows, LLM-shape tuning,
 grouped program-ordering candidates, attention context, and profiler-backed

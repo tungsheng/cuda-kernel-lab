@@ -16,7 +16,8 @@ explains the method being tested, not only the faster backend.
 | fusion | Row-wise normalization fusion | `rmsnorm`, `layernorm` | Fuses row reductions, normalization, parameter loads, and affine writeback. |
 | fusion | Elementwise SwiGLU fusion | `swiglu` | Fuses sigmoid/SwiLU gating and multiply without materializing activation intermediates. |
 | tiling | Tiled dot-product reuse | `matmul` | Uses tiled `tl.dot` matmul plus tile-shape and launch-configuration sweeps to study reuse, occupancy, pipeline staging, register pressure, and Tensor Core utilization. |
-| fusion | One-token decode attention fusion | `attention` | Establishes the fused target for decode attention: score calculation, softmax, and value accumulation without materialized score/probability tensors. |
+| tiling | Persistent tiled dot-product scheduling | `matmul` | Keeps a bounded set of Triton programs resident across output tiles to study persistent scheduling, wave count, occupancy, and Tensor Core utilization. |
+| baseline | Contiguous KV-cache decode attention baseline | `attention` | Establishes the PyTorch control for one-token decode attention with contiguous key/value cache layout before future custom fused attention work. |
 | launch replay | CUDA Graph decode-step replay | `decode_step` | Replays static and piecewise synthetic decode steps to separate CPU/driver launch overhead from GPU kernel time and dynamic-shape graph reuse. |
 
 ## How To Describe An Experiment
@@ -66,14 +67,16 @@ memory, registers, warp count, and pipeline stages explain the tile-shape
 tradeoff.
 
 Attention experiments should first pin down the PyTorch contiguous-KV baseline
-and shape sensitivity. Custom decode kernels should be evaluated as fused decode
-targets where K/V cache reads dominate traffic and score/probability
-intermediate writes are avoided.
+and shape sensitivity. Future custom attention kernels should be evaluated as
+fused decode targets where K/V cache reads dominate traffic and
+score/probability intermediate writes are avoided.
 
 CUDA Graph experiments should be read as launch-path tests. Compare host wall
 time, CUDA event time, CPU utilization, and launch-overhead estimates across
 the naive/fused and eager/graph matrix before attributing any change to kernel
-code.
+code. For `decode_step`, `fused` means the synthetic RMSNorm and SwiGLU regions
+use Triton fused kernels; it does not mean attention itself is a custom fused
+kernel.
 
 Piecewise CUDA Graph experiments should be read as dynamic-shape compromise
 tests. Compare graph hit rate and padding waste against the fully eager dynamic

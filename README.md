@@ -59,7 +59,7 @@ replay, use the workflow docs linked below.
 ```text
 src/cuda_kernel_lab/
 ├── benchmarks/     # benchmark entry points
-├── kernels/        # PyTorch, Triton, and CUDA kernel trees
+├── kernels/        # PyTorch baselines and Triton kernel implementations
 ├── ops/            # backend-neutral traffic and FLOP models
 ├── benchmark.py    # timing and result metadata
 └── benchmark_cli.py
@@ -73,8 +73,8 @@ Implemented kernel evidence tracks:
 - fused SwiGLU elementwise activation
 - tiled matmul progression and Tensor Core validation sweeps
 - contiguous KV-cache decode-attention PyTorch baseline
-- synthetic decode-step benchmark for eager, full-graph, piecewise-graph, and
-  dynamic trace replay
+- synthetic decode-step benchmark for eager, whole-step CUDA Graph, piecewise
+  CUDA Graph, and dynamic trace replay
 
 ## Read Next
 
